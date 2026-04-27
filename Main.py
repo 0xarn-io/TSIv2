@@ -18,9 +18,16 @@ keep it in the module and expose a `.from_config(...)` constructor.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from nicegui import app, ui
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 from box_scene        import BoxScene
 from camera_panel     import CameraManager

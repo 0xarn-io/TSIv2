@@ -120,7 +120,9 @@ class SickPublisher:
             log.warning("live publish failed: %s", e)
 
     def _on_event(self, ev) -> None:
+        s = _event_to_struct(ev)
+        log.info("event w=%d h=%d off=%d", s["nWidthMean"], s["nHeightMean"], s["nOffsetMean"])
         try:
-            self.plc.write(self.cfg.event_alias, _event_to_struct(ev))
+            self.plc.write(self.cfg.event_alias, s)
         except Exception as e:
             log.warning("event publish failed: %s", e)

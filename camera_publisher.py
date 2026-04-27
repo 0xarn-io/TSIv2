@@ -55,6 +55,7 @@ class CameraPublisher:
             # Bind name in default arg so each subscription captures its own.
             def _cb(_alias, val, name=t.camera):
                 if val:
+                    log.info("snap %s", name)
                     self.cameras.trigger(name)
 
             handles = self.plc.subscribe(t.alias, _cb, on_change=True)
