@@ -1,0 +1,25 @@
+# Application configuration for main.py
+# (PLC variable mappings live separately in plc_vars.toml)
+
+[plc]
+ams_net_id    = "169.254.115.139.1.1"
+enable_symbol = "pyADS.bEnable"
+
+[scanner]
+separation_m   = 2.45
+belt_speed_mps = 0.254
+belt_y         = -1.48
+
+[ui]
+refresh_hz = 10.0          # live-label update rate
+host       = "0.0.0.0"
+port       = 8080
+title      = "Warak TSI"
+
+[[cameras]]
+name = "entry"
+url  = "rtsp://192.168.125.50:554/profile1"
+
+[[cameras]]
+name = "exit"
+url  = "rtsp://192.168.125.51:554/profile1"

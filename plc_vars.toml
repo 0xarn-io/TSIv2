@@ -1,0 +1,32 @@
+[ams]
+net_id = "192.168.1.10.1.1"
+port = 851
+
+# Define UDTs once, reference them from vars
+[structs.ST_SickEvent]
+bNew         = "BOOL"
+nLength      = "DINT"
+nWidthMean   = "DINT"
+nWidthMin    = "DINT"
+nWidthMax    = "DINT"
+nHeightMean  = "DINT"
+nHeightMin   = "DINT"
+nHeightMax   = "DINT"
+nOffsetMean  = "DINT"
+nOffsetMin   = "DINT"
+nOffsetMax   = "DINT"
+fDuration    = "REAL"
+nSamples     = "DINT"
+
+[structs.ST_SickLive]
+nWidth  = "DINT"
+nHeight = "DINT"
+nOffset = "DINT"
+
+[groups.sick]
+prefix = ""   # GVL with {attribute 'qualified_only'} → use bare name
+
+[groups.sick.vars]
+event   = { name = "GVL_Sick.SickEvent", type = "ST_SickEvent" }
+live    = { name = "GVL_Sick.SickLive",  type = "ST_SickLive" }
+enable  = { name = "GVL_Sick.bEnable",   type = "BOOL" }
