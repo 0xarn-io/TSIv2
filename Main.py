@@ -28,6 +28,7 @@ logging.basicConfig(
     format="%(asctime)s %(message)s",
     datefmt="%H:%M:%S",
 )
+logging.getLogger("watchfiles").setLevel(logging.WARNING)
 
 from box_scene        import BoxScene
 from camera_panel     import CameraManager
