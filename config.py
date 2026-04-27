@@ -12,15 +12,17 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from box_scene    import BoxConfig
-from camera_panel import CameraConfig
-from sick_publisher import PublisherConfig
+from box_scene        import BoxConfig
+from camera_panel     import CameraConfig
+from camera_publisher import CameraTriggerConfig
+from sick_publisher   import PublisherConfig
 
 
 @dataclass(frozen=True)
 class PLCSettings:
-    vars_file: str
-    publisher: PublisherConfig
+    vars_file:       str
+    publisher:       PublisherConfig
+    camera_triggers: list[CameraTriggerConfig]
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,10 @@ class AppConfig:
             plc=PLCSettings(
                 vars_file=vars_file,
                 publisher=PublisherConfig(**d["plc"]["publisher"]),
+                camera_triggers=[
+                    CameraTriggerConfig(**t)
+                    for t in d["plc"].get("camera_triggers", [])
+                ],
             ),
             scanner=ScannerSettings(**d["scanner"]),
             ui=UISettings(**d["ui"]),

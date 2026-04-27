@@ -24,9 +24,16 @@ nHeight = "DINT"
 nOffset = "DINT"
 
 [groups.sick]
-prefix = ""   # GVL with {attribute 'qualified_only'} → use bare name
+prefix = "pyADS"   # GVL with {attribute 'qualified_only'} → use bare name
 
 [groups.sick.vars]
-event   = { name = "GVL_Sick.SickEvent", type = "ST_SickEvent" }
-live    = { name = "GVL_Sick.SickLive",  type = "ST_SickLive" }
-enable  = { name = "GVL_Sick.bEnable",   type = "BOOL" }
+event   = { name = "SickEvent", type = "ST_SickEvent" }
+live    = { name = "SickLive",  type = "ST_SickLive" }
+enable  = { name = "bEnable",   type = "BOOL" }
+
+[groups.camera]
+prefix = "pyADS"
+
+[groups.camera.vars]
+snap_entry = { name = "bSnapEntry", type = "BOOL" }
+snap_exit  = { name = "bSnapExit",  type = "BOOL" }

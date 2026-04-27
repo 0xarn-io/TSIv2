@@ -11,6 +11,16 @@ live_alias      = "sick.live"
 enable_alias    = "sick.enable"
 enable_cycle_ms = 100
 
+# Map PLC bool aliases (in plc_signals.toml) to camera names (below).
+# Rising edge on the PLC bool fires a snapshot from that camera.
+[[plc.camera_triggers]]
+alias  = "camera.snap_entry"
+camera = "entry"
+
+[[plc.camera_triggers]]
+alias  = "camera.snap_exit"
+camera = "exit"
+
 [scanner]
 udp_port_a     = 2111
 udp_port_b     = 2112

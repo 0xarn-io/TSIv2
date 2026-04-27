@@ -10,12 +10,13 @@ from pathlib import Path
 
 from nicegui import app, ui
 
-from box_scene      import BoxScene
-from camera_panel   import CameraManager
-from config         import AppConfig
-from sick_bridge    import SickBridge
-from sick_publisher import SickPublisher
-from twincat_comm   import TwinCATComm
+from box_scene        import BoxScene
+from camera_panel     import CameraManager
+from camera_publisher import CameraPublisher
+from config           import AppConfig
+from sick_bridge      import SickBridge
+from sick_publisher   import SickPublisher
+from twincat_comm     import TwinCATComm
 
 
 # ─── config ───────────────────────────────────────────────────────────────────
@@ -29,6 +30,7 @@ bridge    = SickBridge.from_config(cfg.scanner)
 plc       = TwinCATComm.from_toml(cfg.plc.vars_file)
 publisher = SickPublisher(bridge, plc, cfg.plc.publisher)
 cameras   = CameraManager.from_config(cfg.cameras)
+cam_pub   = CameraPublisher(cameras, plc, cfg.plc.camera_triggers)
 scene     = BoxScene.from_config(cfg.boxes)
 
 
@@ -47,10 +49,12 @@ def _startup() -> None:
     plc.open()
     bridge.start()
     publisher.start()
+    cam_pub.start()
 
 
 @app.on_shutdown
 def _shutdown() -> None:
+    cam_pub.stop()
     publisher.stop()
     bridge.stop()
     plc.close()
