@@ -29,6 +29,17 @@ class SickBridge:
     queue.
     """
 
+    @classmethod
+    def from_config(cls, scanner_cfg) -> "SickBridge":
+        """Construct from a ScannerSettings dataclass."""
+        return cls(
+            udp_port_a=scanner_cfg.udp_port_a,
+            udp_port_b=scanner_cfg.udp_port_b,
+            scanner_separation_m=scanner_cfg.separation_m,
+            belt_speed_m_per_s=scanner_cfg.belt_speed_mps,
+            belt_y=scanner_cfg.belt_y,
+        )
+
     def __init__(
         self,
         *,

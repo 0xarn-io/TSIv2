@@ -1,5 +1,12 @@
-# twincat_comm.py
-"""TOML-driven pyads wrapper for TwinCAT variable lists, with UDT support."""
+"""twincat_comm.py — TOML-driven pyads wrapper for TwinCAT vars, with UDT support.
+
+Public API:
+    comm = TwinCATComm.from_toml("plc_signals.toml")
+    comm.validate(["sick.event", "sick.live"])   # fail-fast at startup
+    with comm:
+        comm.write("sick.live", {"nWidth": 711, "nHeight": 1800, "nOffset": 0})
+        comm.subscribe("sick.enable", lambda alias, val: print(alias, val))
+"""
 from __future__ import annotations
 
 import ctypes
@@ -155,12 +162,14 @@ class TwinCATComm:
         # alias -> (notif_handle, user_handle)
         self._notifications: dict[str, tuple[int, int]] = {}
 
-    def __enter__(self) -> "TwinCATComm":
-        self._conn.open()
-        return self
+    @classmethod
+    def from_toml(cls, path: str | Path) -> "TwinCATComm":
+        return cls(TwinCATConfig.from_toml(path))
 
-    def __exit__(self, exc_type, exc, tb) -> None:
-        self.close()
+    # ---- lifecycle ------------------------------------------------------
+
+    def open(self) -> None:
+        self._conn.open()
 
     def close(self) -> None:
         for handles in list(self._notifications.values()):
@@ -171,9 +180,26 @@ class TwinCATComm:
         self._notifications.clear()
         self._conn.close()
 
-    @classmethod
-    def from_toml(cls, path: str | Path) -> "TwinCATComm":
-        return cls(TwinCATConfig.from_toml(path))
+    def __enter__(self) -> "TwinCATComm":
+        self.open()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    # ---- validation -----------------------------------------------------
+
+    def validate(self, required_aliases: list[str]) -> None:
+        """Raise if any alias is missing from the loaded TOML. Call at startup."""
+        missing = [a for a in required_aliases if a not in self.config.variables]
+        if missing:
+            known = sorted(self.config.variables)
+            raise KeyError(
+                f"plc_signals.toml is missing required alias(es): {missing}. "
+                f"Known aliases: {known}"
+            )
+
+    # ---- read / write ---------------------------------------------------
 
     def _resolve(self, alias: str) -> VarDef:
         try:
@@ -219,6 +245,8 @@ class TwinCATComm:
                 f"Valid: {sorted(known)}"
             )
 
+        # Partial dict → read-modify-write so untouched fields aren't zeroed.
+        # Costs one extra ADS round-trip per partial write.
         if set(value.keys()) != known:
             current = self._conn.read_by_name(v.symbol, cls_)
         else:
@@ -227,6 +255,8 @@ class TwinCATComm:
         for fname, fval in value.items():
             setattr(current, fname, fval)
         return current
+
+    # ---- notifications --------------------------------------------------
 
     def subscribe(
         self,
@@ -241,7 +271,6 @@ class TwinCATComm:
         length = (ctypes.sizeof(v.plc_type) if v.is_struct
                   else ctypes.sizeof(PRIMITIVE_TYPES[v.type_name.upper()][1]))
 
-        # NotificationAttrib takes seconds; we accept ms and convert.
         attr = pyads.NotificationAttrib(
             length=length,
             trans_mode=(pyads.ADSTRANS_SERVERONCHA if on_change
@@ -250,9 +279,6 @@ class TwinCATComm:
             cycle_time=cycle_time_ms / 1000,
         )
 
-        # Fresh closure per subscribe call — alias and callback are captured
-        # safely. If you ever refactor this into a loop creating multiple
-        # callbacks, bind them as default args: def _cb(..., a=alias, c=callback)
         @self._conn.notification(v.plc_type)
         def _cb(handle, name, timestamp, value):
             callback(alias, self._unpack(v, value))
@@ -263,7 +289,6 @@ class TwinCATComm:
 
     def unsubscribe(self, handles: tuple[int, int]) -> None:
         self._conn.del_device_notification(*handles)
-        # remove by value match
         for k, v in list(self._notifications.items()):
             if v == handles:
                 del self._notifications[k]

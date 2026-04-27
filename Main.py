@@ -1,81 +1,59 @@
-"""main.py — NiceGUI app: SICK + pyADS + cameras + 3D scene."""
+"""Main.py — NiceGUI app: SICK + TwinCAT + cameras + 3D scene.
 
+Pattern:  build → page → lifecycle → run.
+Adding a new module = one line in each section. Don't put logic here;
+keep it in the module and expose a `.from_config(...)` constructor.
+"""
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 from nicegui import app, ui
 
-from box_scene import mount_box_scene, on_box_click
-from camera_panel import CameraManager
-from config import AppConfig
-from sick_ads_adapter import attach_pyads
-from sick_bridge import SickBridge
+from box_scene      import BoxScene
+from camera_panel   import CameraManager
+from config         import AppConfig
+from sick_bridge    import SickBridge
+from sick_publisher import SickPublisher
+from twincat_comm   import TwinCATComm
 
 
-CONFIG_PATH = Path(__file__).with_name("app_config.toml")
-cfg = AppConfig.load(CONFIG_PATH)
+# ─── config ───────────────────────────────────────────────────────────────────
+
+cfg = AppConfig.load(Path(__file__).with_name("app_config.toml"))
 
 
-# ─── shared state ─────────────────────────────────────────────────────────────
+# ─── build ────────────────────────────────────────────────────────────────────
 
-@dataclass
-class State:
-    bridge:  SickBridge | None    = None
-    pub:     object | None        = None
-    plc:     object | None        = None
-    watcher: object | None        = None
-    cameras: CameraManager | None = None
-    latest:  dict | None          = None
-
-state = State()
-
-
-# ─── lifecycle ────────────────────────────────────────────────────────────────
-
-def on_startup() -> None:
-    bridge = SickBridge(
-        scanner_separation_m=cfg.scanner.separation_m,
-        belt_speed_m_per_s=cfg.scanner.belt_speed_mps,
-        belt_y=cfg.scanner.belt_y,
-    )
-    pub, plc, watcher = attach_pyads(
-        bridge,
-        ams_net_id=cfg.plc.ams_net_id,
-        enable_symbol=cfg.plc.enable_symbol,
-    )
-    bridge.on_measurement(lambda m: setattr(state, "latest", m))
-    bridge.start()
-
-    state.bridge  = bridge
-    state.pub     = pub
-    state.plc     = plc
-    state.watcher = watcher
-    state.cameras = CameraManager(cfg.cameras)
-
-
-def on_shutdown() -> None:
-    if state.watcher is not None:
-        state.watcher.stop()
-    if state.bridge is not None:
-        state.bridge.stop()
-    if state.plc is not None:
-        try:
-            state.plc.close()
-        except Exception:
-            pass
-
-
-app.on_startup(on_startup)
-app.on_shutdown(on_shutdown)
+bridge    = SickBridge.from_config(cfg.scanner)
+plc       = TwinCATComm.from_toml(cfg.plc.vars_file)
+publisher = SickPublisher(bridge, plc, cfg.plc.publisher)
+cameras   = CameraManager.from_config(cfg.cameras)
+scene     = BoxScene.from_config(cfg.boxes)
 
 
 # ─── page ─────────────────────────────────────────────────────────────────────
 
 @ui.page("/")
 def index() -> None:
-    pass
+    scene.mount()
+    cameras.build()
+
+
+# ─── lifecycle ────────────────────────────────────────────────────────────────
+
+@app.on_startup
+def _startup() -> None:
+    plc.open()
+    bridge.start()
+    publisher.start()
+
+
+@app.on_shutdown
+def _shutdown() -> None:
+    publisher.stop()
+    bridge.stop()
+    plc.close()
 
 
 # ─── run ──────────────────────────────────────────────────────────────────────

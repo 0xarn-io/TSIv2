@@ -1,43 +1,51 @@
-"""
-camera_panel.py - NiceGUI camera panels with bool-triggered snapshots.
-"""
+"""camera_panel.py — NiceGUI camera panels with bool-triggered snapshots.
 
-from dataclasses import dataclass, field
-from typing import Callable, Optional
-from nicegui import ui, run   # add `run`
+Usage in main.py:
+    cameras = CameraManager.from_config(cfg.cameras)
 
-from rtsp_capture import capture_as_jpeg_bytes, capture_as_base64
+    @ui.page("/")
+    def index():
+        cameras.build()
+
+    # later, to snap from anywhere:
+    cameras.trigger("entry")
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional
+
+from nicegui import ui, run
+
+from rtsp_capture import capture_as_base64
 
 
 @dataclass
 class CameraConfig:
-    name: str
+    name:     str
     rtsp_url: str
 
 
 @dataclass
 class CameraTrigger:
-    """
-    Boolean trigger for a camera. Set `.value = True` from anywhere to fire
-    a snapshot on the next poll cycle. Auto-resets to False after firing.
-    """
+    """Boolean trigger; set .value=True from anywhere to fire on next poll."""
     value: bool = False
 
-    def fire(self):
+    def fire(self) -> None:
         self.value = True
 
 
 class CameraPanel:
-    """A single camera panel: UI + snapshot logic + bool trigger."""
+    """One camera panel: image + status + manual button + trigger flag."""
 
     def __init__(self, config: CameraConfig):
         self.config = config
         self.trigger = CameraTrigger()
         self._busy = False
-        self._img: Optional[ui.image] = None
+        self._img:    Optional[ui.image] = None
         self._status: Optional[ui.label] = None
 
-    def build(self):
+    def build(self) -> "CameraPanel":
         """Build the NiceGUI elements. Call inside a @ui.page function."""
         with ui.card().classes("w-[480px]"):
             ui.label(f"{self.config.name.capitalize()} Camera").classes(
@@ -47,7 +55,6 @@ class CameraPanel:
             self._status = ui.label("No snapshot yet").classes(
                 "text-sm text-gray-500"
             )
-
             with ui.row():
                 ui.button(
                     "Snapshot",
@@ -55,7 +62,7 @@ class CameraPanel:
                 ).props("icon=photo_camera")
         return self
 
-    async def snapshot(self, source: str = "manual"):
+    async def snapshot(self, source: str = "manual") -> None:
         """Capture and display a snapshot. Safe to call concurrently."""
         if self._busy:
             return
@@ -65,8 +72,7 @@ class CameraPanel:
             data_url = await run.io_bound(capture_as_base64, self.config.rtsp_url)
             if data_url:
                 self._img.set_source(data_url)
-                # rough size estimate: base64 is ~4/3 the original byte size
-                kb = len(data_url) * 3 // 4 // 1024
+                kb = len(data_url) * 3 // 4 // 1024  # base64 ≈ 4/3 of raw bytes
                 self._status.text = f"Captured via {source} ({kb} KB)"
             else:
                 self._status.text = f"Capture failed ({source})"
@@ -86,14 +92,20 @@ class CameraManager:
             cfg.name: CameraPanel(cfg) for cfg in configs
         }
         self.poll_hz = poll_hz
+        self._poll_timer = None
 
-    def build_ui(self):
-        """Build all camera panels in a row."""
+    @classmethod
+    def from_config(
+        cls, configs: list[CameraConfig], poll_hz: float = 10.0,
+    ) -> "CameraManager":
+        return cls(configs, poll_hz=poll_hz)
+
+    def build(self) -> "CameraManager":
+        """Build all panels + Snap-All button + polling timer. Call in a page."""
         with ui.row().classes("gap-4"):
             for panel in self.panels.values():
                 panel.build()
 
-        # Optional "Snap All" button
         async def snap_all():
             for panel in self.panels.values():
                 await panel.snapshot("manual-all")
@@ -101,12 +113,22 @@ class CameraManager:
         ui.button("Snap All", on_click=snap_all).props(
             "icon=photo_library color=primary"
         )
-
         self._start_polling()
         return self
 
-    def _start_polling(self):
-        """Watch each panel's trigger bool and fire on rising edge."""
+    def trigger(self, name: str) -> None:
+        """Fire a snapshot trigger by camera name."""
+        if name in self.panels:
+            self.panels[name].trigger.fire()
+
+    def get_trigger(self, name: str) -> CameraTrigger:
+        """Direct reference to a camera's trigger bool."""
+        return self.panels[name].trigger
+
+    # ---- internals ----
+
+    def _start_polling(self) -> None:
+        """Watch each trigger and fire snapshots on the rising edge."""
         last_state = {name: False for name in self.panels}
 
         def poll():
@@ -121,13 +143,4 @@ class CameraManager:
                     )
                 last_state[name] = current
 
-        ui.timer(1.0 / self.poll_hz, poll)
-
-    def trigger(self, name: str):
-        """Fire a snapshot trigger by camera name."""
-        if name in self.panels:
-            self.panels[name].trigger.fire()
-
-    def get_trigger(self, name: str) -> CameraTrigger:
-        """Get a direct reference to a camera's trigger bool."""
-        return self.panels[name].trigger
+        self._poll_timer = ui.timer(1.0 / self.poll_hz, poll)
