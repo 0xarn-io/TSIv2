@@ -1,0 +1,134 @@
+"""Tests for TwinCATConfig parsing + TwinCATComm validation/struct logic."""
+from __future__ import annotations
+
+import ctypes
+from pathlib import Path
+
+import pytest
+
+from twincat_comm import (
+    PRIMITIVE_TYPES, StructDef, TwinCATComm, TwinCATConfig, VarDef,
+)
+
+
+def test_from_toml_parses_ams(signals_toml: Path):
+    cfg = TwinCATConfig.from_toml(signals_toml)
+    assert cfg.net_id == "1.2.3.4.1.1"
+    assert cfg.port == 851
+
+
+def test_from_toml_builds_structs(signals_toml: Path):
+    cfg = TwinCATConfig.from_toml(signals_toml)
+    assert "ST_SickEvent" in cfg.structs
+    assert "ST_SickLive" in cfg.structs
+    live = cfg.structs["ST_SickLive"]
+    assert list(live.fields) == ["nWidth", "nHeight", "nOffset"]
+    # 3 packed DINTs = 12 bytes
+    assert live.size == 12
+
+
+def test_from_toml_builds_aliases(signals_toml: Path):
+    cfg = TwinCATConfig.from_toml(signals_toml)
+    assert set(cfg.variables) == {"sick.event", "sick.live", "sick.enable"}
+    enable = cfg.variables["sick.enable"]
+    assert enable.symbol == "GVL_Sick.bEnable"
+    assert enable.is_struct is False
+
+
+def test_unknown_type_raises(tmp_path: Path):
+    p = tmp_path / "bad.toml"
+    p.write_text("""
+[ams]
+net_id = "1.1.1.1.1.1"
+port = 851
+
+[groups.x]
+prefix = ""
+
+[groups.x.vars]
+foo = { name = "Foo", type = "WIDGET" }
+""")
+    with pytest.raises(ValueError, match="neither a primitive nor a defined struct"):
+        TwinCATConfig.from_toml(p)
+
+
+def test_validate_passes_when_aliases_present(signals_toml: Path):
+    comm = TwinCATComm.from_toml(signals_toml)
+    comm.validate(["sick.event", "sick.live", "sick.enable"])
+
+
+def test_validate_raises_on_missing_alias(signals_toml: Path):
+    comm = TwinCATComm.from_toml(signals_toml)
+    with pytest.raises(KeyError, match="missing required alias"):
+        comm.validate(["sick.event", "nonexistent.alias"])
+
+
+def test_pack_struct_full_dict_no_read(signals_toml: Path):
+    """When all fields are supplied, _pack_struct must not call ADS read."""
+    comm = TwinCATComm.from_toml(signals_toml)
+    v = comm.config.variables["sick.live"]
+
+    def boom(*_a, **_kw):
+        raise AssertionError("read_by_name must not be called for full dict")
+    comm._conn.read_by_name = boom
+
+    packed = comm._pack_struct(v, {"nWidth": 711, "nHeight": 1800, "nOffset": 0})
+    assert packed.nWidth == 711
+    assert packed.nHeight == 1800
+    assert packed.nOffset == 0
+
+
+def test_pack_struct_partial_dict_triggers_read(signals_toml: Path):
+    """Partial dicts should fall through to read-modify-write."""
+    comm = TwinCATComm.from_toml(signals_toml)
+    v = comm.config.variables["sick.live"]
+    cls_ = v.plc_type
+    seen = {"called": False}
+
+    def fake_read(symbol, ptype):
+        seen["called"] = True
+        out = cls_()
+        out.nWidth = 100; out.nHeight = 200; out.nOffset = 300
+        return out
+    comm._conn.read_by_name = fake_read
+
+    packed = comm._pack_struct(v, {"nWidth": 999})
+    assert seen["called"] is True
+    assert packed.nWidth == 999
+    assert packed.nHeight == 200      # preserved
+    assert packed.nOffset == 300      # preserved
+
+
+def test_pack_struct_unknown_field(signals_toml: Path):
+    comm = TwinCATComm.from_toml(signals_toml)
+    v = comm.config.variables["sick.live"]
+    with pytest.raises(KeyError, match="Unknown fields"):
+        comm._pack_struct(v, {"nBogus": 1})
+
+
+def test_unpack_struct_returns_dict(signals_toml: Path):
+    comm = TwinCATComm.from_toml(signals_toml)
+    v = comm.config.variables["sick.live"]
+    cls_ = v.plc_type
+    raw = cls_(); raw.nWidth = 1; raw.nHeight = 2; raw.nOffset = 3
+    out = comm._unpack(v, raw)
+    assert out == {"nWidth": 1, "nHeight": 2, "nOffset": 3}
+
+
+def test_unpack_primitive_passthrough(signals_toml: Path):
+    comm = TwinCATComm.from_toml(signals_toml)
+    v = comm.config.variables["sick.enable"]
+    assert comm._unpack(v, True) is True
+
+
+def test_resolve_unknown_alias_lists_known(signals_toml: Path):
+    comm = TwinCATComm.from_toml(signals_toml)
+    with pytest.raises(KeyError, match="sick.enable"):
+        comm._resolve("does.not.exist")
+
+
+def test_primitive_types_complete():
+    """Make sure all referenced PLCTYPE_* exist on pyads (smoke check)."""
+    for name, (plc_const, ctype) in PRIMITIVE_TYPES.items():
+        assert plc_const is not None, name
+        assert ctypes.sizeof(ctype) > 0, name
