@@ -120,7 +120,7 @@ class RecipesPanel:
         original_code = existing.code if existing else None
 
         with ui.dialog() as dialog, ui.card().classes(
-            "min-w-[640px] p-0 overflow-hidden"
+            "min-w-[640px] max-h-[90vh] p-0 overflow-hidden"
         ):
             with ui.element("div").classes(
                 "bg-[#0053A1] text-white px-5 py-3"
@@ -130,7 +130,18 @@ class RecipesPanel:
                     "text-base font-semibold"
                 )
 
-            with ui.column().classes("gap-4 p-5 w-full"):
+            # Disclaimer banner — every numeric field below is in mm.
+            with ui.element("div").classes(
+                "bg-[#0053A1]/5 border-b border-[#0053A1]/10 px-5 py-2 "
+                "text-xs text-[#0053A1] flex items-center gap-2"
+            ):
+                ui.icon("straighten").classes("text-base")
+                ui.label("All measurements are in millimeters (mm).")
+
+            # Scrollable body — keeps Save/Cancel pinned and visible.
+            with ui.column().classes(
+                "gap-4 p-5 w-full overflow-y-auto"
+            ).style("max-height: calc(90vh - 180px)"):
                 code = ui.number(
                     "Code", value=existing.code if existing else 1,
                     format="%d", min=0,
@@ -169,7 +180,11 @@ class RecipesPanel:
                 # ---- Wood ----
                 inputs_w = self._wood_section(existing)
 
-                with ui.row().classes("justify-end gap-2 w-full pt-1"):
+            # Pinned action bar — stays visible while the body scrolls.
+            with ui.element("div").classes(
+                "border-t border-[#E5E9EE] px-5 py-3 bg-[#F8FAFC]"
+            ):
+                with ui.row().classes("justify-end gap-2 w-full"):
                     ui.button("Cancel", on_click=dialog.close).props("flat")
                     ui.button(
                         "Save", icon="save",
