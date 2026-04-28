@@ -75,12 +75,20 @@ class RecipePublisher:
         except Exception as e:
             log.warning("initial recipe read failed: %s", e)
 
-        self._handles = self.plc.subscribe(
-            self.cfg.code_alias,
-            lambda _alias, val: self._apply(int(val)),
-            cycle_time_ms=self.cfg.cycle_ms,
-            on_change=True,
-        )
+        try:
+            self._handles = self.plc.subscribe(
+                self.cfg.code_alias,
+                lambda _alias, val: self._apply(int(val)),
+                cycle_time_ms=self.cfg.cycle_ms,
+                on_change=True,
+            )
+        except Exception as e:
+            log.warning(
+                "recipe code subscription failed (%s); recipe publisher "
+                "disabled until '%s' is available on the PLC",
+                e, self.cfg.code_alias,
+            )
+            self._handles = None
 
     def stop(self) -> None:
         if self._handles is not None:

@@ -93,6 +93,17 @@ def test_start_handles_initial_read_failure(caplog):
     assert any("initial recipe read failed" in r.message for r in caplog.records)
 
 
+def test_start_handles_subscription_failure(caplog):
+    """Missing PLC symbol on subscribe must NOT propagate — log + continue."""
+    pub, recipes, plc = _make()
+    plc.subscribe.side_effect = RuntimeError("symbol not found (1808)")
+    import logging
+    with caplog.at_level(logging.WARNING, logger="recipe_publisher"):
+        pub.start()                                  # must not raise
+    assert pub._handles is None
+    assert any("subscription failed" in r.message for r in caplog.records)
+
+
 def test_subscribe_callback_writes_setpoints():
     """The PLC notification path: code change → DB lookup → struct write."""
     pub, recipes, plc = _make()
