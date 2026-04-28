@@ -34,7 +34,7 @@ class SizeSetpointConfig:
 
 
 def _size_to_struct(s: Size) -> dict:
-    """Size → ST_SizeSetpoints dict (4 × INT).
+    """Size → ST_SizeSetpoints dict (2 × INT).
 
     Adding a setpoint: append a field here AND in [structs.ST_SizeSetpoints]
     in plc_signals.toml. No other code changes.
@@ -42,8 +42,6 @@ def _size_to_struct(s: Size) -> dict:
     return {
         "nWidthMm":  int(s.width_mm),
         "nLengthMm": int(s.length_mm),
-        "nWidthIn":  int(s.width_in),
-        "nLengthIn": int(s.length_in),
     }
 
 

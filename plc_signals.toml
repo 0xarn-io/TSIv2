@@ -40,8 +40,6 @@ nSpeedRatio  = "DINT"
 [structs.ST_SizeSetpoints]
 nWidthMm  = "INT"
 nLengthMm = "INT"
-nWidthIn  = "INT"
-nLengthIn = "INT"
 
 [structs.ST_RecipeSetpoints]
 nXTopsheetLength = "DINT"

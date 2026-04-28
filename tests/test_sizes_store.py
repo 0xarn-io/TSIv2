@@ -14,8 +14,7 @@ def _store(tmp_path: Path) -> SizesStore:
 
 
 def _size(name: str = "A4", **overrides) -> Size:
-    base = dict(name=name, width_mm=210, length_mm=297,
-                width_in=8, length_in=12)
+    base = dict(name=name, width_mm=210, length_mm=297)
     base.update(overrides)
     return Size(**base)
 
@@ -37,16 +36,13 @@ def test_start_creates_both_tables(tmp_path: Path):
 def test_add_and_get_round_trip(tmp_path: Path, table: str):
     s = _store(tmp_path); s.start()
     try:
-        sid = s.add(table, _size(name="Foo", width_mm=300, length_mm=400,
-                                  width_in=12, length_in=16))
+        sid = s.add(table, _size(name="Foo", width_mm=300, length_mm=400))
         got = s.get(table, sid)
         assert got is not None
         assert got.id == sid
         assert got.name == "Foo"
         assert got.width_mm == 300
         assert got.length_mm == 400
-        assert got.width_in == 12
-        assert got.length_in == 16
     finally:
         s.stop()
 
@@ -96,8 +92,7 @@ def test_update_modifies_row_and_bumps_updated_at(tmp_path: Path):
             ).fetchone()[0] is None
 
         s.update("cardboard", Size(id=sid, name="changed",
-                                   width_mm=1, length_mm=2,
-                                   width_in=1, length_in=2))
+                                   width_mm=1, length_mm=2))
         got = s.get("cardboard", sid)
         assert got.name == "changed"
         assert got.width_mm == 1
@@ -123,8 +118,7 @@ def test_update_missing_id_raises(tmp_path: Path):
     s = _store(tmp_path); s.start()
     try:
         with pytest.raises(KeyError):
-            s.update("cardboard", Size(id=999, name="x", width_mm=1, length_mm=1,
-                                        width_in=1, length_in=1))
+            s.update("cardboard", Size(id=999, name="x", width_mm=1, length_mm=1))
     finally:
         s.stop()
 
