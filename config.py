@@ -15,6 +15,7 @@ from pathlib import Path
 from box_scene        import BoxConfig
 from camera_panel     import CameraConfig
 from camera_publisher import CameraTriggerConfig
+from plc_heartbeat    import HeartbeatConfig
 from sick_publisher   import PublisherConfig
 
 
@@ -23,6 +24,7 @@ class PLCSettings:
     vars_file:       str
     publisher:       PublisherConfig
     camera_triggers: list[CameraTriggerConfig]
+    heartbeat:       HeartbeatConfig | None
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,10 @@ class AppConfig:
                     CameraTriggerConfig(**t)
                     for t in d["plc"].get("camera_triggers", [])
                 ],
+                heartbeat=(
+                    HeartbeatConfig(**d["plc"]["heartbeat"])
+                    if "heartbeat" in d["plc"] else None
+                ),
             ),
             scanner=ScannerSettings(**d["scanner"]),
             ui=UISettings(**d["ui"]),

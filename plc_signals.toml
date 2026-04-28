@@ -39,3 +39,9 @@ prefix = "pyADS"
 [groups.camera.vars]
 snap_entry = { name = "bSnapEntry", type = "BOOL" }
 snap_exit  = { name = "bSnapExit",  type = "BOOL" }
+
+[groups.health]
+prefix = "pyADS"
+
+[groups.health.vars]
+heartbeat = { name = "nHeartbeat", type = "UDINT" }

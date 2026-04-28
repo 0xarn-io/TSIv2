@@ -34,6 +34,7 @@ from box_scene        import BoxScene
 from camera_panel     import CameraManager
 from camera_publisher import CameraPublisher
 from config           import AppConfig
+from plc_heartbeat    import PLCHeartbeat
 from sick_bridge      import SickBridge
 from sick_publisher   import SickPublisher
 from twincat_comm     import TwinCATComm
@@ -51,6 +52,7 @@ plc       = TwinCATComm.from_toml(cfg.plc.vars_file)
 publisher = SickPublisher(bridge, plc, cfg.plc.publisher)
 cameras   = CameraManager.from_config(cfg.cameras)
 cam_pub   = CameraPublisher(cameras, plc, cfg.plc.camera_triggers)
+heartbeat = PLCHeartbeat(plc, cfg.plc.heartbeat) if cfg.plc.heartbeat else None
 scene     = BoxScene.from_config(cfg.boxes)
 
 
@@ -70,10 +72,12 @@ def _startup() -> None:
     bridge.start()
     publisher.start()
     cam_pub.start()
+    if heartbeat: heartbeat.start()
 
 
 @app.on_shutdown
 def _shutdown() -> None:
+    if heartbeat: heartbeat.stop()
     cam_pub.stop()
     publisher.stop()
     bridge.stop()

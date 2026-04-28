@@ -119,6 +119,12 @@ prefix = ""
 event   = { name = "GVL_Sick.SickEvent", type = "ST_SickEvent" }
 live    = { name = "GVL_Sick.SickLive",  type = "ST_SickLive" }
 enable  = { name = "GVL_Sick.bEnable",   type = "BOOL" }
+
+[groups.health]
+prefix = ""
+
+[groups.health.vars]
+heartbeat = { name = "GVL.nHeartbeat", type = "UDINT" }
 """)
     return p
 
