@@ -1,0 +1,28 @@
+# recipes.toml — recipe database for palletizing parameters.
+# Each [[recipes]] entry mirrors the PLC's recipe Instance Editor schema:
+# Recipe Code, X/Y topsheet + unit + 3-position layout (with folding flag),
+# and an optional wood pallet block. Numeric fields are millimetres or
+# unit counts; folding/wood are booleans.
+#
+# Add a recipe = append a new [[recipes]] table with all fields set.
+# Look up by `recipe_code`.
+
+[[recipes]]
+recipe_code       = 0
+x_topsheet_length = 0
+x_topsheet_width  = 0
+x_units           = 0
+x_position_1      = 0
+x_position_2      = 0
+x_position_3      = 0
+x_folding         = false
+y_topsheet_length = 0
+y_topsheet_width  = 0
+y_units           = 0
+y_position_1      = 0
+y_position_2      = 0
+y_position_3      = 0
+y_folding         = false
+wood              = false
+wood_x_position   = 0
+wood_y_position   = 0
