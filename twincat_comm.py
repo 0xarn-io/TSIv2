@@ -10,6 +10,7 @@ Public API:
 from __future__ import annotations
 
 import ctypes
+import logging
 import tomllib
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -17,6 +18,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 import pyads
+
+log = logging.getLogger(__name__)
+
+
+def _short(v: Any) -> str:
+    """Compact one-line repr — keeps struct dicts readable in log lines."""
+    if isinstance(v, dict):
+        return "{" + " ".join(f"{k}={val}" for k, val in v.items()) + "}"
+    return repr(v)
 
 
 # IEC primitive type → (pyads PLCTYPE_*, ctypes type for struct packing)
@@ -64,6 +74,7 @@ class VarDef:
 class TwinCATConfig:
     net_id: str
     port: int
+    log_signals: bool = False
     structs: dict[str, StructDef] = field(default_factory=dict)
     variables: dict[str, VarDef] = field(default_factory=dict)
 
@@ -79,9 +90,13 @@ class TwinCATConfig:
         except KeyError as e:
             raise ValueError(f"[ams] missing required key: {e}") from e
 
+        log_signals = bool(data["ams"].get("log_signals", False))
         structs = cls._build_structs(data.get("structs", {}))
         variables = cls._build_vars(data.get("groups", {}), structs)
-        return cls(net_id=net_id, port=port, structs=structs, variables=variables)
+        return cls(
+            net_id=net_id, port=port, log_signals=log_signals,
+            structs=structs, variables=variables,
+        )
 
     @staticmethod
     def _build_structs(specs: dict[str, dict[str, str]]) -> dict[str, StructDef]:
@@ -212,7 +227,10 @@ class TwinCATComm:
     def read(self, alias: str) -> Any:
         v = self._resolve(alias)
         raw = self._conn.read_by_name(v.symbol, v.plc_type)
-        return self._unpack(v, raw)
+        val = self._unpack(v, raw)
+        if self.config.log_signals:
+            log.info("ads R %s = %s", alias, _short(val))
+        return val
 
     def write(self, alias: str, value: Any) -> None:
         v = self._resolve(alias)
@@ -221,6 +239,8 @@ class TwinCATComm:
             self._conn.write_by_name(v.symbol, packed, v.plc_type)
         else:
             self._conn.write_by_name(v.symbol, value, v.plc_type)
+        if self.config.log_signals:
+            log.info("ads W %s = %s", alias, _short(value))
 
     def _unpack(self, v: VarDef, raw: Any) -> Any:
         if not v.is_struct:
@@ -279,9 +299,14 @@ class TwinCATComm:
             cycle_time=cycle_time_ms / 1000,
         )
 
+        log_signals = self.config.log_signals
+
         @self._conn.notification(v.plc_type)
         def _cb(handle, name, timestamp, value):
-            callback(alias, self._unpack(v, value))
+            unpacked = self._unpack(v, value)
+            if log_signals:
+                log.info("ads N %s = %s", alias, _short(unpacked))
+            callback(alias, unpacked)
 
         handles = self._conn.add_device_notification(v.symbol, attr, _cb)
         self._notifications[alias] = handles

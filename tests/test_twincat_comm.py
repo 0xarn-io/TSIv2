@@ -127,6 +127,63 @@ def test_resolve_unknown_alias_lists_known(signals_toml: Path):
         comm._resolve("does.not.exist")
 
 
+def test_log_signals_default_off(signals_toml: Path):
+    cfg = TwinCATConfig.from_toml(signals_toml)
+    assert cfg.log_signals is False
+
+
+def test_log_signals_can_be_enabled(tmp_path: Path):
+    p = tmp_path / "sig.toml"
+    p.write_text("""
+[ams]
+net_id = "1.2.3.4.1.1"
+port = 851
+log_signals = true
+
+[groups.x]
+prefix = ""
+[groups.x.vars]
+flag = { name = "Foo", type = "BOOL" }
+""")
+    cfg = TwinCATConfig.from_toml(p)
+    assert cfg.log_signals is True
+
+
+def test_read_logs_when_enabled(signals_toml: Path, caplog):
+    import logging
+    comm = TwinCATComm.from_toml(signals_toml)
+    comm.config = TwinCATConfig(
+        net_id=comm.config.net_id, port=comm.config.port, log_signals=True,
+        structs=comm.config.structs, variables=comm.config.variables,
+    )
+    comm._conn.read_by_name = lambda *_a, **_kw: True
+    with caplog.at_level(logging.INFO, logger="twincat_comm"):
+        comm.read("sick.enable")
+    assert any("ads R sick.enable" in r.message for r in caplog.records)
+
+
+def test_read_silent_when_disabled(signals_toml: Path, caplog):
+    import logging
+    comm = TwinCATComm.from_toml(signals_toml)  # log_signals defaults to False
+    comm._conn.read_by_name = lambda *_a, **_kw: True
+    with caplog.at_level(logging.INFO, logger="twincat_comm"):
+        comm.read("sick.enable")
+    assert not any("ads R" in r.message for r in caplog.records)
+
+
+def test_write_logs_when_enabled(signals_toml: Path, caplog):
+    import logging
+    comm = TwinCATComm.from_toml(signals_toml)
+    comm.config = TwinCATConfig(
+        net_id=comm.config.net_id, port=comm.config.port, log_signals=True,
+        structs=comm.config.structs, variables=comm.config.variables,
+    )
+    comm._conn.write_by_name = lambda *_a, **_kw: None
+    with caplog.at_level(logging.INFO, logger="twincat_comm"):
+        comm.write("sick.enable", True)
+    assert any("ads W sick.enable" in r.message for r in caplog.records)
+
+
 def test_primitive_types_complete():
     """Make sure all referenced PLCTYPE_* exist on pyads (smoke check)."""
     for name, (plc_const, ctype) in PRIMITIVE_TYPES.items():
