@@ -99,6 +99,9 @@ class RecipePublisher:
     # ---- internals ----------------------------------------------------------
 
     def _apply(self, code: int) -> None:
+        if code <= 0:
+            # 0 means "no selection" — don't warn, don't query the DB.
+            return
         recipe = self.recipes.get(code)
         if recipe is None:
             log.warning("recipe code %s not found in DB — no setpoints written", code)

@@ -82,6 +82,17 @@ def test_start_handles_unknown_initial_code(caplog):
     assert any("recipe code 42 not found" in r.message for r in caplog.records)
 
 
+def test_start_skips_code_zero_silently(caplog):
+    """code=0 means 'no selection' — must not query the DB or warn."""
+    pub, recipes, plc = _make(initial_code=0)
+    import logging
+    with caplog.at_level(logging.WARNING, logger="recipe_publisher"):
+        pub.start()
+    recipes.get.assert_not_called()
+    plc.write.assert_not_called()
+    assert not any("not found" in r.message for r in caplog.records)
+
+
 def test_start_handles_initial_read_failure(caplog):
     pub, recipes, plc = _make()
     plc.read.side_effect = RuntimeError("ADS down")
