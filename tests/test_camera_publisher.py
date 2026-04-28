@@ -141,7 +141,7 @@ def test_snapshot_done_writes_false_to_plc():
     pub.start()
 
     # Simulate the entry panel finishing a snapshot.
-    captured["entry"]("entry", "trigger:entry", True)
+    captured["entry"]("entry", "trigger:entry", True, None)
     plc.write.assert_called_once_with("camera.snap_entry", False)
 
 
@@ -157,8 +157,8 @@ def test_each_done_cb_acks_its_own_alias():
     )
     pub.start()
 
-    captured["entry"]("entry", "x", True)
-    captured["exit"]("exit",   "x", True)
+    captured["entry"]("entry", "x", True, "/snaps/entry.jpg")
+    captured["exit"]("exit",   "x", True, None)
 
     written = [c.args for c in plc.write.call_args_list]
     assert ("camera.snap_entry", False) in written
@@ -178,7 +178,7 @@ def test_ack_swallows_write_errors():
     plc.write.side_effect = RuntimeError("ADS down")
 
     # Must not raise — failed acks shouldn't tear down the snapshot pipeline.
-    captured["entry"]("entry", "x", True)
+    captured["entry"]("entry", "x", True, None)
 
 
 def test_stop_removes_done_callbacks():

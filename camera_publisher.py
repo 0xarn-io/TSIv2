@@ -66,7 +66,7 @@ class CameraPublisher:
             # Handshake: clear the PLC bool once the snapshot completes.
             panel = self.cameras.panels[t.camera]
             unsub = panel.on_snapshot_done(
-                lambda _name, _source, _ok, alias=t.alias: self._ack(alias)
+                lambda _name, _source, _ok, _path, alias=t.alias: self._ack(alias)
             )
             self._unsub_done.append(unsub)
 

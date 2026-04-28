@@ -22,6 +22,25 @@ period_ms = 1000
 [plc.robot_status]
 status_alias = "robot.status"
 
+# Optional: pair the active-recipe DINT (PLC writes) with the setpoints
+# struct (Python writes). Requires [recipes] below. Comment out to disable.
+[plc.recipe]
+code_alias      = "recipe.code"
+setpoints_alias = "recipe.setpoints"
+
+# Optional: per-table active-size bridge. Each entry pairs a DINT id
+# (PLC writes) with an ST_SizeSetpoints struct (Python writes) for one
+# table in the sizes DB. Requires [sizes] below. Drop the array to disable.
+[[plc.size_setpoints]]
+table           = "cardboard"
+code_alias      = "size.cardboard_id"
+setpoints_alias = "size.cardboard_setpoints"
+
+[[plc.size_setpoints]]
+table           = "others"
+code_alias      = "size.others_id"
+setpoints_alias = "size.others_setpoints"
+
 # Map PLC bool aliases (in plc_signals.toml) to camera names (below).
 # Rising edge on the PLC bool fires a snapshot from that camera.
 [[plc.camera_triggers]]
@@ -80,3 +99,25 @@ password   = "robotics"
 verify_ssl = false
 poll_ms    = 2000
 timeout_s  = 2.0
+
+# ---- data layer (all optional) ----------------------------------------------
+# Each section is independent. Comment one out and that store is simply not
+# built — no code change needed. The DBOrchestrator skips missing sections.
+
+[recipes]
+db_path = "data/recipes.db"
+
+[sizes]
+db_path = "data/sizes.db"
+
+[unit_log]
+db_path   = "data/units.db"
+keep_days = 0          # 0 = keep forever
+
+[errors_log]
+db_path   = "data/errors.db"
+keep_days = 0
+
+[snapshots]
+root_dir  = "data/snapshots"
+keep_days = 90

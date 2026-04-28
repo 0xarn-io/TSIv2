@@ -15,10 +15,17 @@ from pathlib import Path
 from box_scene        import BoxConfig
 from camera_panel     import CameraConfig
 from camera_publisher import CameraTriggerConfig
+from errors_store     import ErrorsConfig
 from plc_heartbeat    import HeartbeatConfig
+from recipe_publisher import RecipePublisherConfig
+from recipes_store    import RecipesConfig
 from robot_publisher  import RobotStatusConfig
 from robot_status     import RobotConfig
 from sick_publisher   import PublisherConfig
+from sizes_publisher  import SizeSetpointConfig
+from sizes_store      import SizesConfig
+from snapshot_archive import SnapshotArchiveConfig
+from unit_logger      import UnitLoggerConfig
 
 
 @dataclass(frozen=True)
@@ -28,6 +35,8 @@ class PLCSettings:
     camera_triggers: list[CameraTriggerConfig]
     heartbeat:       HeartbeatConfig | None
     robot_status:    RobotStatusConfig | None
+    recipe:          RecipePublisherConfig | None
+    size_setpoints:  list[SizeSetpointConfig]
 
 
 @dataclass(frozen=True)
@@ -49,12 +58,17 @@ class UISettings:
 
 @dataclass(frozen=True)
 class AppConfig:
-    plc:     PLCSettings
-    scanner: ScannerSettings
-    ui:      UISettings
-    cameras: list[CameraConfig]
-    boxes:   list[BoxConfig]
-    robot:   RobotConfig | None
+    plc:        PLCSettings
+    scanner:    ScannerSettings
+    ui:         UISettings
+    cameras:    list[CameraConfig]
+    boxes:      list[BoxConfig]
+    robot:      RobotConfig | None
+    recipes:    RecipesConfig | None
+    sizes:      SizesConfig | None
+    unit_log:   UnitLoggerConfig | None
+    errors_log: ErrorsConfig | None
+    snapshots:  SnapshotArchiveConfig | None
 
     @classmethod
     def load(cls, path: str | Path) -> "AppConfig":
@@ -81,6 +95,14 @@ class AppConfig:
                     RobotStatusConfig(**d["plc"]["robot_status"])
                     if "robot_status" in d["plc"] else None
                 ),
+                recipe=(
+                    RecipePublisherConfig(**d["plc"]["recipe"])
+                    if "recipe" in d["plc"] else None
+                ),
+                size_setpoints=[
+                    SizeSetpointConfig(**s)
+                    for s in d["plc"].get("size_setpoints", [])
+                ],
             ),
             scanner=ScannerSettings(**d["scanner"]),
             ui=UISettings(**d["ui"]),
@@ -88,4 +110,20 @@ class AppConfig:
                      for c in d["cameras"]],
             boxes=[BoxConfig(**b) for b in d["boxes"]],
             robot=(RobotConfig(**d["robot"]) if "robot" in d else None),
+            recipes=(
+                RecipesConfig(**d["recipes"]) if "recipes" in d else None
+            ),
+            sizes=(
+                SizesConfig(**d["sizes"]) if "sizes" in d else None
+            ),
+            unit_log=(
+                UnitLoggerConfig(**d["unit_log"]) if "unit_log" in d else None
+            ),
+            errors_log=(
+                ErrorsConfig(**d["errors_log"]) if "errors_log" in d else None
+            ),
+            snapshots=(
+                SnapshotArchiveConfig(**d["snapshots"])
+                if "snapshots" in d else None
+            ),
         )

@@ -3,6 +3,9 @@ net_id = "169.254.115.139.1.1"
 port = 851
 # Set true to log every ADS read/write/notification (chatty; debugging only).
 log_signals = false
+# Per-call ADS response timeout. Bump if you see "timeout elapsed (1861)"
+# on writes — often indicates a slow PLC scan or first-time symbol resolve.
+timeout_ms = 5000
 
 # Define UDTs once, reference them from vars
 [structs.ST_SickEvent]
@@ -34,6 +37,29 @@ bGuardStop   = "BOOL"
 bEStop       = "BOOL"
 nSpeedRatio  = "DINT"
 
+[structs.ST_SizeSetpoints]
+nWidthMm  = "INT"
+nLengthMm = "INT"
+
+[structs.ST_RecipeSetpoints]
+nXTopsheetLength = "DINT"
+nXTopsheetWidth  = "DINT"
+nXUnits          = "DINT"
+nX1Pos           = "DINT"
+nX2Pos           = "DINT"
+nX3Pos           = "DINT"
+bXFolding        = "BOOL"
+nYTopsheetLength = "DINT"
+nYTopsheetWidth  = "DINT"
+nYUnits          = "DINT"
+nY1Pos           = "DINT"
+nY2Pos           = "DINT"
+nY3Pos           = "DINT"
+bYFolding        = "BOOL"
+bWood            = "BOOL"
+nWoodXPos        = "DINT"
+nWoodYPos        = "DINT"
+
 [groups.sick]
 prefix = "pyADS"   # GVL with {attribute 'qualified_only'} → use bare name
 
@@ -60,3 +86,19 @@ prefix = "pyADS"
 
 [groups.robot.vars]
 status = { name = "RobotStatus", type = "ST_RobotStatus" }
+
+[groups.recipe]
+prefix = "pyADS"
+
+[groups.recipe.vars]
+code      = { name = "nRecipeCode",     type = "DINT" }
+setpoints = { name = "RecipeSetpoints", type = "ST_RecipeSetpoints" }
+
+[groups.size]
+prefix = "pyADS"
+
+[groups.size.vars]
+cardboard_id        = { name = "nCardboardId",       type = "INT" }
+cardboard_setpoints = { name = "CardboardSetpoints", type = "ST_SizeSetpoints" }
+others_id           = { name = "nOtherId",           type = "INT" }
+others_setpoints    = { name = "OtherSetpoints",     type = "ST_SizeSetpoints" }

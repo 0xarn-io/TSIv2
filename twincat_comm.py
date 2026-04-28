@@ -75,6 +75,7 @@ class TwinCATConfig:
     net_id: str
     port: int
     log_signals: bool = False
+    timeout_ms: int = 5000          # per-call ADS response timeout
     structs: dict[str, StructDef] = field(default_factory=dict)
     variables: dict[str, VarDef] = field(default_factory=dict)
 
@@ -91,10 +92,12 @@ class TwinCATConfig:
             raise ValueError(f"[ams] missing required key: {e}") from e
 
         log_signals = bool(data["ams"].get("log_signals", False))
+        timeout_ms  = int(data["ams"].get("timeout_ms", 5000))
         structs = cls._build_structs(data.get("structs", {}))
         variables = cls._build_vars(data.get("groups", {}), structs)
         return cls(
-            net_id=net_id, port=port, log_signals=log_signals,
+            net_id=net_id, port=port,
+            log_signals=log_signals, timeout_ms=timeout_ms,
             structs=structs, variables=variables,
         )
 
@@ -186,6 +189,11 @@ class TwinCATComm:
 
     def open(self) -> None:
         self._conn.open()
+        try:
+            self._conn.set_timeout(self.config.timeout_ms)
+        except Exception as e:
+            log.warning("set_timeout(%s ms) failed: %s",
+                        self.config.timeout_ms, e)
 
     def close(self) -> None:
         for handles in list(self._notifications.values()):
