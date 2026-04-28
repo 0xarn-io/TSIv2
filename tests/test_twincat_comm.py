@@ -68,10 +68,15 @@ def test_from_toml_builds_aliases(signals_toml: Path):
     assert set(cfg.variables) == {
         "sick.event", "sick.live", "sick.enable",
         "health.heartbeat", "robot.status",
+        "recipe.code", "recipe.setpoints",
     }
     enable = cfg.variables["sick.enable"]
     assert enable.symbol == "GVL_Sick.bEnable"
     assert enable.is_struct is False
+    setpoints = cfg.variables["recipe.setpoints"]
+    assert setpoints.symbol    == "GVL.RecipeSetpoints"
+    assert setpoints.type_name == "ST_RecipeSetpoints"
+    assert setpoints.is_struct is True
 
 
 def test_unknown_type_raises(tmp_path: Path):

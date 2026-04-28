@@ -22,6 +22,12 @@ period_ms = 1000
 [plc.robot_status]
 status_alias = "robot.status"
 
+# Optional: pair the active-recipe DINT (PLC writes) with the setpoints
+# struct (Python writes). Requires [recipes] below. Comment out to disable.
+[plc.recipe]
+code_alias      = "recipe.code"
+setpoints_alias = "recipe.setpoints"
+
 # Map PLC bool aliases (in plc_signals.toml) to camera names (below).
 # Rising edge on the PLC bool fires a snapshot from that camera.
 [[plc.camera_triggers]]
@@ -80,3 +86,22 @@ password   = "robotics"
 verify_ssl = false
 poll_ms    = 2000
 timeout_s  = 2.0
+
+# ---- data layer (all optional) ----------------------------------------------
+# Each section is independent. Comment one out and that store is simply not
+# built — no code change needed. The DBOrchestrator skips missing sections.
+
+[recipes]
+db_path = "data/recipes.db"
+
+[unit_log]
+db_path   = "data/units.db"
+keep_days = 0          # 0 = keep forever
+
+[errors_log]
+db_path   = "data/errors.db"
+keep_days = 0
+
+[snapshots]
+root_dir  = "data/snapshots"
+keep_days = 90

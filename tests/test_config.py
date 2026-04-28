@@ -6,10 +6,15 @@ from pathlib import Path
 from box_scene       import BoxConfig
 from camera_panel    import CameraConfig
 from config          import AppConfig, PLCSettings, ScannerSettings, UISettings
+from errors_store    import ErrorsConfig
 from plc_heartbeat   import HeartbeatConfig
+from recipe_publisher import RecipePublisherConfig
+from recipes_store   import RecipesConfig
 from robot_publisher import RobotStatusConfig
 from robot_status    import RobotConfig
 from sick_publisher  import PublisherConfig
+from snapshot_archive import SnapshotArchiveConfig
+from unit_logger     import UnitLoggerConfig
 
 
 def test_load_full_config(app_toml: Path):
@@ -142,6 +147,74 @@ poll_ms = 1500
     assert cfg.robot.poll_ms == 1500
     assert isinstance(cfg.plc.robot_status, RobotStatusConfig)
     assert cfg.plc.robot_status.status_alias == "robot.status"
+
+
+def test_data_layer_optional_absent(app_toml: Path):
+    """Default fixture has no data-layer sections; all four are None."""
+    cfg = AppConfig.load(app_toml)
+    assert cfg.recipes    is None
+    assert cfg.unit_log   is None
+    assert cfg.errors_log is None
+    assert cfg.snapshots  is None
+    assert cfg.plc.recipe is None
+
+
+def test_data_layer_loads_when_present(tmp_path: Path, signals_toml: Path):
+    p = tmp_path / "with_data.toml"
+    p.write_text(f"""
+[plc]
+vars_file = "{signals_toml.name}"
+[plc.publisher]
+event_alias = "sick.event"
+live_alias = "sick.live"
+enable_alias = "sick.enable"
+[plc.recipe]
+code_alias      = "recipe.code"
+setpoints_alias = "recipe.setpoints"
+[scanner]
+udp_port_a = 2111
+udp_port_b = 2112
+separation_m = 2.45
+belt_speed_mps = 0.254
+belt_y = -1.48
+[ui]
+refresh_hz = 10.0
+host = "0.0.0.0"
+port = 8080
+title = "Test"
+[[cameras]]
+name = "x"
+url = "rtsp://x"
+[[boxes]]
+width_mm = 1
+height_mm = 1
+depth_mm = 1
+x_pos = 0.0
+[recipes]
+db_path = "data/recipes.db"
+[unit_log]
+db_path   = "data/units.db"
+keep_days = 7
+[errors_log]
+db_path   = "data/errors.db"
+keep_days = 30
+[snapshots]
+root_dir  = "data/snaps"
+keep_days = 90
+""")
+    cfg = AppConfig.load(p)
+    assert isinstance(cfg.recipes, RecipesConfig)
+    assert cfg.recipes.db_path == "data/recipes.db"
+    assert isinstance(cfg.unit_log, UnitLoggerConfig)
+    assert cfg.unit_log.keep_days == 7
+    assert isinstance(cfg.errors_log, ErrorsConfig)
+    assert cfg.errors_log.keep_days == 30
+    assert isinstance(cfg.snapshots, SnapshotArchiveConfig)
+    assert cfg.snapshots.root_dir == "data/snaps"
+    assert cfg.snapshots.keep_days == 90
+    assert isinstance(cfg.plc.recipe, RecipePublisherConfig)
+    assert cfg.plc.recipe.code_alias      == "recipe.code"
+    assert cfg.plc.recipe.setpoints_alias == "recipe.setpoints"
 
 
 def test_heartbeat_loads_when_present(tmp_path: Path, signals_toml: Path):

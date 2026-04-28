@@ -1,7 +1,7 @@
 """camera_panel.py — NiceGUI camera panels with bool-triggered snapshots.
 
 Usage in main.py:
-    cameras = CameraManager.from_config(cfg.cameras)
+    cameras = CameraManager.from_config(cfg.cameras, archive=archive)
 
     @ui.page("/")
     def index():
@@ -9,16 +9,20 @@ Usage in main.py:
 
     # later, to snap from anywhere:
     cameras.trigger("entry")
+
+If `archive` is provided, every successful capture also persists the JPEG
+bytes to disk and forwards the path to `on_snapshot_done` callbacks.
 """
 from __future__ import annotations
 
+import base64
 import logging
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 from nicegui import ui, run
 
-from rtsp_capture import capture_as_base64
+from rtsp_capture import capture_as_jpeg_bytes
 
 log = logging.getLogger(__name__)
 
@@ -41,18 +45,23 @@ class CameraTrigger:
 class CameraPanel:
     """One camera panel: image + status + manual button + trigger flag."""
 
-    def __init__(self, config: CameraConfig):
+    def __init__(self, config: CameraConfig, archive=None):
         self.config = config
+        self.archive = archive
         self.trigger = CameraTrigger()
         self._busy = False
         self._img:    Optional[ui.image] = None
         self._status: Optional[ui.label] = None
-        self._done_cbs: list[Callable[[str, str, bool], None]] = []
+        self._done_cbs: list[Callable[[str, str, bool, str | None], None]] = []
 
     def on_snapshot_done(
-        self, cb: Callable[[str, str, bool], None],
+        self, cb: Callable[[str, str, bool, str | None], None],
     ) -> Callable[[], None]:
-        """Register cb(camera_name, source, ok) called after every snapshot."""
+        """Register cb(camera_name, source, ok, path) called after every snapshot.
+
+        `path` is the saved-on-disk path (str) when an archive is configured
+        and the capture succeeded, else None.
+        """
         self._done_cbs.append(cb)
         return lambda: self._done_cbs.remove(cb)
 
@@ -79,12 +88,24 @@ class CameraPanel:
             return
         self._busy = True
         ok = False
+        path: str | None = None
         try:
             self._status.text = f"Capturing ({source})..."
-            data_url = await run.io_bound(capture_as_base64, self.config.rtsp_url)
-            if data_url:
+            jpeg_bytes = await run.io_bound(
+                capture_as_jpeg_bytes, self.config.rtsp_url,
+            )
+            if jpeg_bytes:
+                if self.archive is not None:
+                    try:
+                        path = self.archive.save(self.config.name, jpeg_bytes)
+                    except Exception as e:
+                        log.warning("snapshot archive save failed: %s", e)
+                data_url = (
+                    "data:image/jpeg;base64,"
+                    + base64.b64encode(jpeg_bytes).decode("ascii")
+                )
                 self._img.set_source(data_url)
-                kb = len(data_url) * 3 // 4 // 1024  # base64 ≈ 4/3 of raw bytes
+                kb = len(jpeg_bytes) // 1024
                 self._status.text = f"Captured via {source} ({kb} KB)"
                 ok = True
             else:
@@ -97,7 +118,7 @@ class CameraPanel:
             self._busy = False
             for cb in list(self._done_cbs):
                 try:
-                    cb(self.config.name, source, ok)
+                    cb(self.config.name, source, ok, path)
                 except Exception as e:
                     log.warning("snapshot done callback failed: %s", e)
 
@@ -105,18 +126,25 @@ class CameraPanel:
 class CameraManager:
     """Manages multiple camera panels and polls their bool triggers."""
 
-    def __init__(self, configs: list[CameraConfig], poll_hz: float = 10.0):
+    def __init__(
+        self,
+        configs: list[CameraConfig],
+        poll_hz: float = 10.0,
+        archive=None,
+    ):
+        self.archive = archive
         self.panels: dict[str, CameraPanel] = {
-            cfg.name: CameraPanel(cfg) for cfg in configs
+            cfg.name: CameraPanel(cfg, archive=archive) for cfg in configs
         }
         self.poll_hz = poll_hz
         self._poll_timer = None
 
     @classmethod
     def from_config(
-        cls, configs: list[CameraConfig], poll_hz: float = 10.0,
+        cls, configs: list[CameraConfig], poll_hz: float = 10.0, *,
+        archive=None,
     ) -> "CameraManager":
-        return cls(configs, poll_hz=poll_hz)
+        return cls(configs, poll_hz=poll_hz, archive=archive)
 
     def build(self) -> "CameraManager":
         """Build all panels + Snap-All button + polling timer. Call in a page."""

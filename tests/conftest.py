@@ -121,6 +121,17 @@ bGuardStop   = "BOOL"
 bEStop       = "BOOL"
 nSpeedRatio  = "DINT"
 
+[structs.ST_RecipeSetpoints]
+nWidth   = "DINT"
+nHeight  = "DINT"
+nDepth   = "DINT"
+nX1Pos   = "DINT"
+nX2Pos   = "DINT"
+nX3Pos   = "DINT"
+nY1Pos   = "DINT"
+nY2Pos   = "DINT"
+nY3Pos   = "DINT"
+
 [groups.sick]
 prefix = ""
 
@@ -140,6 +151,13 @@ prefix = ""
 
 [groups.robot.vars]
 status = { name = "GVL.RobotStatus", type = "ST_RobotStatus" }
+
+[groups.recipe]
+prefix = ""
+
+[groups.recipe.vars]
+code      = { name = "GVL.nRecipeCode",     type = "DINT" }
+setpoints = { name = "GVL.RecipeSetpoints", type = "ST_RecipeSetpoints" }
 """)
     return p
 

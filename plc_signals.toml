@@ -34,6 +34,17 @@ bGuardStop   = "BOOL"
 bEStop       = "BOOL"
 nSpeedRatio  = "DINT"
 
+[structs.ST_RecipeSetpoints]
+nWidth   = "DINT"
+nHeight  = "DINT"
+nDepth   = "DINT"
+nX1Pos   = "DINT"
+nX2Pos   = "DINT"
+nX3Pos   = "DINT"
+nY1Pos   = "DINT"
+nY2Pos   = "DINT"
+nY3Pos   = "DINT"
+
 [groups.sick]
 prefix = "pyADS"   # GVL with {attribute 'qualified_only'} → use bare name
 
@@ -60,3 +71,10 @@ prefix = "pyADS"
 
 [groups.robot.vars]
 status = { name = "RobotStatus", type = "ST_RobotStatus" }
+
+[groups.recipe]
+prefix = "pyADS"
+
+[groups.recipe.vars]
+code      = { name = "nRecipeCode",     type = "DINT" }
+setpoints = { name = "RecipeSetpoints", type = "ST_RecipeSetpoints" }
