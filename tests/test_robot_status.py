@@ -84,13 +84,13 @@ def _make_monitor(get_responses: dict[str, dict] | None = None):
     """Build a RobotMonitor whose _get returns canned responses by path."""
     m = RobotMonitor(RobotConfig(ip="1.2.3.4"))
     responses = get_responses or {}
-    m._get = lambda path, params=None: responses.get(path)
+    m._get = lambda path, params=None, silent=False: responses.get(path)
     return m
 
 
 def test_poll_updates_status():
     m = _make_monitor({
-        "/rw/panel/ctrlstate":   {"state": [{"ctrlstate": "motoron"}]},
+        "/rw/panel/ctrl-state":  {"state": [{"ctrlstate": "motoron"}]},
         "/rw/panel/opmode":      {"state": [{"opmode": "AUTO"}]},
         "/rw/rapid/execution":   {"state": [{"ctrlexecstate": "running"}]},
         "/rw/panel/speedratio":  {"state": [{"speedratio": "100"}]},
@@ -115,7 +115,7 @@ def test_poll_handles_missing_responses():
 def test_on_change_fires_on_any_field_change():
     """on_change fires whenever any tracked field changes, not just is_ready."""
     state = {
-        "/rw/panel/ctrlstate":   {"state": [{"ctrlstate": "motoron"}]},
+        "/rw/panel/ctrl-state":  {"state": [{"ctrlstate": "motoron"}]},
         "/rw/panel/opmode":      {"state": [{"opmode": "AUTO"}]},
         "/rw/rapid/execution":   {"state": [{"ctrlexecstate": "running"}]},
         "/rw/panel/speedratio":  {"state": [{"speedratio": "100"}]},
@@ -175,6 +175,51 @@ def test_fetch_errors_include_info_keeps_everything():
 def test_fetch_errors_returns_empty_on_no_response():
     m = _make_monitor({})
     assert m.fetch_errors() == []
+
+
+def test_get_first_returns_first_success():
+    """Mirror the original test script: try multiple paths, take first 200."""
+    m = _make_monitor({
+        # First path returns nothing (None), second path returns data.
+        "/rw/panel/ctrlstate": {"state": [{"ctrlstate": "motoron"}]},
+    })
+    out = m._get_first("/rw/panel/ctrl-state", "/rw/panel/ctrlstate")
+    assert out == {"state": [{"ctrlstate": "motoron"}]}
+
+
+def test_get_first_warns_only_when_all_fail(caplog):
+    import logging
+    m = _make_monitor({})  # every path returns None
+    with caplog.at_level(logging.WARNING, logger="robot_status"):
+        out = m._get_first("/a", "/b", "/c")
+    assert out is None
+    msgs = [r.message for r in caplog.records]
+    assert sum("all variants failed" in m for m in msgs) == 1
+
+
+def test_get_first_falls_back_in_poll():
+    """If RW7 only answers on /ctrl-state (with hyphen), _poll still works."""
+    m = _make_monitor({
+        # Only the with-hyphen path returns data.
+        "/rw/panel/ctrl-state":  {"state": [{"ctrlstate": "motoron"}]},
+        "/rw/panel/opmode":      {"state": [{"opmode": "AUTO"}]},
+        "/rw/rapid/execution":   {"state": [{"ctrlexecstate": "running"}]},
+        "/rw/panel/speedratio":  {"state": [{"speedratio": "100"}]},
+    })
+    m._poll()
+    assert m.status().ctrl_state == "motoron"
+
+
+def test_get_first_field_name_fallback():
+    """If response uses 'ctrl-state' as the key instead of 'ctrlstate'."""
+    m = _make_monitor({
+        "/rw/panel/ctrl-state":  {"state": [{"ctrl-state": "motoron"}]},
+        "/rw/panel/opmode":      {"state": [{"opmode": "AUTO"}]},
+        "/rw/rapid/execution":   {"state": [{"ctrlexecstate": "running"}]},
+        "/rw/panel/speedratio":  {"state": [{"speedratio": "100"}]},
+    })
+    m._poll()
+    assert m.status().ctrl_state == "motoron"
 
 
 def test_fetch_errors_passes_limit_to_request():

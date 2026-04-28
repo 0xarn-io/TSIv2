@@ -162,15 +162,20 @@ class RobotMonitor:
     def _poll(self) -> None:
         prev = self.status()
 
-        # ctrl-state path varies by RW version: RW7 uses with-hyphen,
-        # older builds drop it. Try the canonical one first.
-        ctrl = self._get("/rw/panel/ctrl-state") or self._get("/rw/panel/ctrlstate")
+        # Mirror the working RWS test script exactly: try multiple paths and
+        # multiple field names, keep quiet about per-path 404s, only warn
+        # when every variant fails.
+        ctrl = self._get_first(
+            "/rw/panel/ctrl-state",
+            "/rw/panel/ctrlstate",
+            "/rw/system/ctrl-state",
+        )
         opm  = self._get("/rw/panel/opmode")
         exe  = self._get("/rw/rapid/execution")
         spd  = self._get("/rw/panel/speedratio")
 
         new = RobotStatus(
-            ctrl_state  = _state(ctrl, "ctrlstate", "ctrl-state"),
+            ctrl_state  = _state(ctrl, "ctrlstate", "ctrl-state", "state"),
             opmode      = _state(opm,  "opmode"),
             exec_state  = _state(exe,  "ctrlexecstate"),
             speed_ratio = _state_int(spd, "speedratio"),
@@ -194,7 +199,7 @@ class RobotMonitor:
                 except Exception as e:
                     log.warning("robot on_change cb failed: %s", e)
 
-    def _get(self, path: str, params=None) -> Optional[dict]:
+    def _get(self, path: str, params=None, silent: bool = False) -> Optional[dict]:
         try:
             r = self._session.get(
                 f"https://{self.cfg.ip}{path}",
@@ -203,10 +208,20 @@ class RobotMonitor:
             )
             if r.status_code == 200:
                 return r.json()
-            # Visible at INFO level so endpoint mismatches surface in the log.
-            log.warning("RWS GET %s -> %s", path, r.status_code)
+            if not silent:
+                log.warning("RWS GET %s -> %s", path, r.status_code)
         except Exception as e:
-            log.warning("RWS GET %s failed: %s", path, e)
+            if not silent:
+                log.warning("RWS GET %s failed: %s", path, e)
+        return None
+
+    def _get_first(self, *paths: str, params=None) -> Optional[dict]:
+        """Try paths in order, return the first 200. Warn only if all fail."""
+        for p in paths:
+            obj = self._get(p, params=params, silent=True)
+            if obj is not None:
+                return obj
+        log.warning("RWS GET (all variants failed): %s", list(paths))
         return None
 
 
