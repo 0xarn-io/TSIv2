@@ -120,6 +120,9 @@ class SickPublisher:
             log.warning("live publish failed: %s", e)
 
     def _on_event(self, ev) -> None:
+        if not getattr(self, "_logged_event_shape", False):
+            log.info("UnitEvent sample: %r", ev)
+            self._logged_event_shape = True
         s = _event_to_struct(ev)
         log.info("event w=%d h=%d off=%d", s["nWidthMean"], s["nHeightMean"], s["nOffsetMean"])
         try:
