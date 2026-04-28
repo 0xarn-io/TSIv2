@@ -168,3 +168,61 @@ def test_db_dir_auto_created(tmp_path: Path):
         assert nested.is_file()
     finally:
         s.stop()
+
+
+def test_migrate_drops_legacy_inch_columns(tmp_path: Path):
+    """Legacy DBs with width_in/length_in NOT NULL must accept new inserts."""
+    db_path = tmp_path / "legacy.db"
+    # Build a DB matching the OLD shape (still has width_in/length_in NOT NULL).
+    with sqlite3.connect(db_path) as legacy:
+        legacy.executescript("""
+            CREATE TABLE cardboard (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                name      TEXT NOT NULL,
+                width_mm  INTEGER NOT NULL,
+                length_mm INTEGER NOT NULL,
+                width_in  INTEGER NOT NULL,
+                length_in INTEGER NOT NULL
+            );
+            CREATE TABLE others (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                name      TEXT NOT NULL,
+                width_mm  INTEGER NOT NULL,
+                length_mm INTEGER NOT NULL,
+                width_in  INTEGER NOT NULL,
+                length_in INTEGER NOT NULL
+            );
+        """)
+        legacy.execute(
+            "INSERT INTO cardboard (name, width_mm, length_mm, width_in, length_in) "
+            "VALUES ('legacy', 100, 200, 4, 8)"
+        )
+        legacy.commit()
+
+    s = SizesStore.from_config(SizesConfig(db_path=str(db_path)))
+    s.start()
+    try:
+        # Legacy row still readable.
+        rows = s.list("cardboard")
+        assert any(r.name == "legacy" for r in rows)
+        # New inserts (without width_in/length_in) must succeed now.
+        sid = s.add("cardboard", _size(name="post-migration"))
+        assert s.get("cardboard", sid).name == "post-migration"
+        # Legacy columns are gone from both tables.
+        with sqlite3.connect(db_path) as c:
+            for table in TABLES:
+                cols = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+                assert "width_in" not in cols
+                assert "length_in" not in cols
+    finally:
+        s.stop()
+
+
+def test_migrate_is_idempotent_on_fresh_dbs(tmp_path: Path):
+    """Running on a brand-new DB (no legacy columns) must be a no-op."""
+    s = _store(tmp_path); s.start(); s.stop()
+    s2 = _store(tmp_path); s2.start()                # second start, same file
+    try:
+        s2.add("cardboard", _size())                 # writes still work
+    finally:
+        s2.stop()
