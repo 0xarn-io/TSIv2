@@ -10,17 +10,18 @@ Brand:
     info     Pantone 2925  #0698D6   (light blue)
     dark     Pantone 2746  #283273   (navy)
 
-Fonts:
-    Muli           — body type. Loaded from Google Fonts.
-    Magistral      — display type for the WARAK wordmark only. Drop a TTF
-                     into `static/Magistral.ttf` to enable; the @font-face
-                     falls back to Muli silently if the file is absent.
+Fonts (corporate spec — both served from local TTFs in `static/`):
+    Muli         — body type. Place Muli-{Light,Regular,SemiBold,Bold}.ttf
+                   under `static/`.
+    Magistral    — display type for the WARAK wordmark only. Place
+                   Magistral-{Regular,Medium,Bold}.ttf under `static/`.
 
-Place TTFs (Magistral-Regular.ttf, Magistral-Medium.ttf, Magistral-Bold.ttf)
-under `static/` in the repo root and serve via:
+Both font families fall back to system sans-serif silently when the TTFs
+aren't present, so the app still runs without breaking.
+
+Wire up the static dir in Main.py:
     from nicegui import app
     app.add_static_files("/static", "static")
-in Main.py.
 """
 from __future__ import annotations
 
@@ -41,11 +42,32 @@ BG_CARD   = "#FFFFFF"
 
 
 _HEAD_HTML = f"""
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Mulish:wght@300;400;600;700;800&display=swap" rel="stylesheet">
-
 <style>
+@font-face {{
+    font-family: 'Muli';
+    src: url('/static/Muli-Light.ttf') format('truetype');
+    font-weight: 300;
+    font-display: swap;
+}}
+@font-face {{
+    font-family: 'Muli';
+    src: url('/static/Muli-Regular.ttf') format('truetype');
+    font-weight: 400;
+    font-display: swap;
+}}
+@font-face {{
+    font-family: 'Muli';
+    src: url('/static/Muli-SemiBold.ttf') format('truetype');
+    font-weight: 600;
+    font-display: swap;
+}}
+@font-face {{
+    font-family: 'Muli';
+    src: url('/static/Muli-Bold.ttf') format('truetype');
+    font-weight: 700;
+    font-display: swap;
+}}
+
 @font-face {{
     font-family: 'Magistral';
     src: url('/static/Magistral-Regular.ttf') format('truetype');
@@ -66,13 +88,13 @@ _HEAD_HTML = f"""
 }}
 
 html, body {{
-    font-family: 'Mulish', 'Muli', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: 'Muli', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     background: {BG_PAGE};
     color: #1f2937;
 }}
 
 .warak-title {{
-    font-family: 'Magistral', 'Mulish', sans-serif;
+    font-family: 'Magistral', 'Muli', sans-serif;
     font-weight: 800;
     letter-spacing: 0.04em;
     color: {PRIMARY};
