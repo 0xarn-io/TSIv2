@@ -75,13 +75,13 @@ class DBOrchestrator:
                           )
                            if getattr(c, "unit_log", None) else None)
 
-        # Order: errors first so anything can log during start, recipes
-        # before recipe_pub (recipe_pub reads from recipes), unit_log last
-        # so the DB is open before any UnitEvent fires.
+        # Order: PLC-independent stores first so a publisher / subscription
+        # failure can't take them down via rollback. recipe_pub depends on
+        # recipes; unit_log uses the PLC for the recipe-code read.
         self._register(self.errors)
         self._register(self.recipes)
-        self._register(self.recipe_pub)
         self._register(self.sizes)
+        self._register(self.recipe_pub)
         self._register(self.unit_log)
 
     def _register(self, obj) -> None:
