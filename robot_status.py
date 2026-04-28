@@ -162,13 +162,15 @@ class RobotMonitor:
     def _poll(self) -> None:
         prev = self.status()
 
-        ctrl = self._get("/rw/panel/ctrlstate")
+        # ctrl-state path varies by RW version: RW7 uses with-hyphen,
+        # older builds drop it. Try the canonical one first.
+        ctrl = self._get("/rw/panel/ctrl-state") or self._get("/rw/panel/ctrlstate")
         opm  = self._get("/rw/panel/opmode")
         exe  = self._get("/rw/rapid/execution")
         spd  = self._get("/rw/panel/speedratio")
 
         new = RobotStatus(
-            ctrl_state  = _state(ctrl, "ctrlstate"),
+            ctrl_state  = _state(ctrl, "ctrlstate", "ctrl-state"),
             opmode      = _state(opm,  "opmode"),
             exec_state  = _state(exe,  "ctrlexecstate"),
             speed_ratio = _state_int(spd, "speedratio"),
@@ -201,7 +203,8 @@ class RobotMonitor:
             )
             if r.status_code == 200:
                 return r.json()
-            log.debug("RWS GET %s -> %s", path, r.status_code)
+            # Visible at INFO level so endpoint mismatches surface in the log.
+            log.warning("RWS GET %s -> %s", path, r.status_code)
         except Exception as e:
             log.warning("RWS GET %s failed: %s", path, e)
         return None
