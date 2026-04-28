@@ -38,10 +38,10 @@ bEStop       = "BOOL"
 nSpeedRatio  = "DINT"
 
 [structs.ST_SizeSetpoints]
-nWidthMm  = "DINT"
-nLengthMm = "DINT"
-fWidthIn  = "REAL"
-fLengthIn = "REAL"
+nWidthMm  = "INT"
+nLengthMm = "INT"
+nWidthIn  = "INT"
+nLengthIn = "INT"
 
 [structs.ST_RecipeSetpoints]
 nXTopsheetLength = "DINT"

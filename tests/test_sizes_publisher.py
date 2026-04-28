@@ -28,7 +28,7 @@ def _drain(pub: SizesPublisher, timeout: float = 1.0) -> None:
 
 def _size(**overrides) -> Size:
     base = dict(name="A4", width_mm=210, length_mm=297,
-                width_in=8.27, length_in=11.69)
+                width_in=8, length_in=12)
     base.update(overrides)
     return Size(**base)
 
@@ -57,10 +57,10 @@ def _make(initial: dict[str, int] | None = None):
 # ---- translation -------------------------------------------------------------
 
 def test_size_to_struct_maps_all_fields():
-    s = _size(width_mm=300, length_mm=400, width_in=11.81, length_in=15.75)
+    s = _size(width_mm=300, length_mm=400, width_in=12, length_in=16)
     assert _size_to_struct(s) == {
         "nWidthMm":  300, "nLengthMm": 400,
-        "fWidthIn":  11.81, "fLengthIn": 15.75,
+        "nWidthIn":  12,  "nLengthIn": 16,
     }
 
 
@@ -180,7 +180,7 @@ def test_callback_writes_correct_table_struct():
         _drain(pub)                                  # initial both 0 → no-ops
         plc.reset_mock()
         sizes.get.return_value = _size(name="X", width_mm=500, length_mm=700,
-                                       width_in=19.69, length_in=27.56)
+                                       width_in=20, length_in=28)
 
         captured["size.cardboard_id"]("size.cardboard_id", 5)
         _drain(pub)

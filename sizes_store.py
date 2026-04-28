@@ -36,8 +36,8 @@ CREATE TABLE IF NOT EXISTS cardboard (
     name       TEXT    NOT NULL,
     width_mm   INTEGER NOT NULL,
     length_mm  INTEGER NOT NULL,
-    width_in   REAL    NOT NULL,
-    length_in  REAL    NOT NULL,
+    width_in   INTEGER NOT NULL,
+    length_in  INTEGER NOT NULL,
     created_at TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT
 );
@@ -46,8 +46,8 @@ CREATE TABLE IF NOT EXISTS others (
     name       TEXT    NOT NULL,
     width_mm   INTEGER NOT NULL,
     length_mm  INTEGER NOT NULL,
-    width_in   REAL    NOT NULL,
-    length_in  REAL    NOT NULL,
+    width_in   INTEGER NOT NULL,
+    length_in  INTEGER NOT NULL,
     created_at TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT
 );
@@ -66,19 +66,20 @@ class Size:
     name:      str
     width_mm:  int
     length_mm: int
-    width_in:  float
-    length_in: float
+    width_in:  int
+    length_in: int
     id:        int | None = None       # None until persisted
 
 
 def _row_to_size(row: sqlite3.Row) -> Size:
+    # Old DBs may have stored width_in/length_in as REAL — coerce to int.
     return Size(
         id        = row["id"],
         name      = row["name"],
-        width_mm  = row["width_mm"],
-        length_mm = row["length_mm"],
-        width_in  = row["width_in"],
-        length_in = row["length_in"],
+        width_mm  = int(row["width_mm"]),
+        length_mm = int(row["length_mm"]),
+        width_in  = int(row["width_in"]),
+        length_in = int(row["length_in"]),
     )
 
 

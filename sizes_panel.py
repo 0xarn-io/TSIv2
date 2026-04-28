@@ -89,8 +89,8 @@ class SizesPanel:
             ui.label(s.name).classes("w-40")
             ui.label(str(s.width_mm)).classes("w-24 text-right")
             ui.label(str(s.length_mm)).classes("w-24 text-right")
-            ui.label(f"{s.width_in:.2f}").classes("w-24 text-right")
-            ui.label(f"{s.length_in:.2f}").classes("w-24 text-right")
+            ui.label(str(s.width_in)).classes("w-24 text-right")
+            ui.label(str(s.length_in)).classes("w-24 text-right")
             with ui.row().classes("flex-grow justify-end gap-1"):
                 ui.button(
                     icon="edit",
@@ -110,19 +110,19 @@ class SizesPanel:
             ui.label(title).classes("text-lg font-bold")
 
             name = ui.input("Name", value=existing.name if existing else "")
-            wmm  = ui.number("Width (mm)",  value=existing.width_mm  if existing else 0,   format="%d")
-            lmm  = ui.number("Length (mm)", value=existing.length_mm if existing else 0,   format="%d")
-            win  = ui.number("Width (in)",  value=existing.width_in  if existing else 0.0, format="%.2f")
-            lin  = ui.number("Length (in)", value=existing.length_in if existing else 0.0, format="%.2f")
+            wmm  = ui.number("Width (mm)",  value=existing.width_mm  if existing else 0, format="%d")
+            lmm  = ui.number("Length (mm)", value=existing.length_mm if existing else 0, format="%d")
+            win  = ui.number("Width (in)",  value=existing.width_in  if existing else 0, format="%d")
+            lin  = ui.number("Length (in)", value=existing.length_in if existing else 0, format="%d")
 
-            def fill_inches_from_mm() -> None:
-                # 1 in = 25.4 mm
-                win.value = round(float(wmm.value or 0) / 25.4, 2)
-                lin.value = round(float(lmm.value or 0) / 25.4, 2)
+            def fill_mm_from_inches() -> None:
+                # 1 in = 25.4 mm; round to nearest mm
+                wmm.value = int(round(float(win.value or 0) * 25.4))
+                lmm.value = int(round(float(lin.value or 0) * 25.4))
 
             ui.button(
-                "Fill inches from mm", icon="swap_horiz",
-                on_click=fill_inches_from_mm,
+                "Fill mm from inches", icon="swap_horiz",
+                on_click=fill_mm_from_inches,
             ).props("flat dense")
 
             def submit() -> None:
@@ -132,8 +132,8 @@ class SizesPanel:
                         name=(name.value or "").strip(),
                         width_mm=int(wmm.value or 0),
                         length_mm=int(lmm.value or 0),
-                        width_in=float(win.value or 0.0),
-                        length_in=float(lin.value or 0.0),
+                        width_in=int(win.value or 0),
+                        length_in=int(lin.value or 0),
                     )
                     if not s.name:
                         ui.notify("Name is required", type="warning")
