@@ -191,11 +191,5 @@ title      = "Test"
 [[cameras]]
 name = "entry"
 url  = "rtsp://x/1"
-
-[[boxes]]
-width_mm  = 711
-height_mm = 1800
-depth_mm  = 1778
-x_pos     = 0.0
 """)
     return p

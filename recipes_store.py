@@ -171,6 +171,43 @@ class RecipesStore:
             )
             conn.commit()
 
+    def delete(self, code: int) -> None:
+        """Hard delete by code. No-op if the row doesn't exist."""
+        with self._lock:
+            conn = self._require_conn()
+            conn.execute("DELETE FROM recipe WHERE code = ?", (int(code),))
+            conn.commit()
+
+    def rename(self, old_code: int, new_code: int) -> None:
+        """Atomically move the row at old_code to new_code.
+
+        Preserves created_at; bumps updated_at. Raises:
+          KeyError       — old_code does not exist.
+          ValueError     — new_code already exists.
+        """
+        old_code, new_code = int(old_code), int(new_code)
+        if old_code == new_code:
+            return
+        with self._lock:
+            conn = self._require_conn()
+            try:
+                conn.execute("BEGIN")
+                if conn.execute(
+                    "SELECT 1 FROM recipe WHERE code = ?", (new_code,),
+                ).fetchone() is not None:
+                    raise ValueError(f"recipe code {new_code} already exists")
+                cur = conn.execute(
+                    "UPDATE recipe SET code = ?, updated_at = datetime('now') "
+                    "WHERE code = ?",
+                    (new_code, old_code),
+                )
+                if cur.rowcount == 0:
+                    raise KeyError(f"recipe code {old_code} not found")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
     # ---- internals ----------------------------------------------------------
 
     def _require_conn(self) -> sqlite3.Connection:

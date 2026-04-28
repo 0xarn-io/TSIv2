@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from box_scene       import BoxConfig
 from camera_panel    import CameraConfig
 from config          import AppConfig, PLCSettings, ScannerSettings, UISettings
 from errors_store    import ErrorsConfig
@@ -56,16 +55,6 @@ def test_cameras_list(app_toml: Path):
     assert cam.rtsp_url == "rtsp://x/1"
 
 
-def test_boxes_list(app_toml: Path):
-    cfg = AppConfig.load(app_toml)
-    assert len(cfg.boxes) == 1
-    b = cfg.boxes[0]
-    assert isinstance(b, BoxConfig)
-    assert b.width_mm == 711
-    assert b.height_mm == 1800
-    assert b.depth_mm == 1778
-
-
 def test_heartbeat_optional_absent_means_none(tmp_path: Path, signals_toml: Path):
     """If [plc.heartbeat] is omitted, cfg.plc.heartbeat is None."""
     p = tmp_path / "no_hb.toml"
@@ -90,11 +79,6 @@ title = "Test"
 [[cameras]]
 name = "x"
 url = "rtsp://x"
-[[boxes]]
-width_mm = 1
-height_mm = 1
-depth_mm = 1
-x_pos = 0.0
 """)
     cfg = AppConfig.load(p)
     assert cfg.plc.heartbeat is None
@@ -132,11 +116,6 @@ title = "Test"
 [[cameras]]
 name = "x"
 url = "rtsp://x"
-[[boxes]]
-width_mm = 1
-height_mm = 1
-depth_mm = 1
-x_pos = 0.0
 [robot]
 ip = "192.168.125.1"
 poll_ms = 1500
@@ -185,11 +164,6 @@ title = "Test"
 [[cameras]]
 name = "x"
 url = "rtsp://x"
-[[boxes]]
-width_mm = 1
-height_mm = 1
-depth_mm = 1
-x_pos = 0.0
 [recipes]
 db_path = "data/recipes.db"
 [unit_log]
@@ -243,11 +217,6 @@ title = "Test"
 [[cameras]]
 name = "x"
 url = "rtsp://x"
-[[boxes]]
-width_mm = 1
-height_mm = 1
-depth_mm = 1
-x_pos = 0.0
 """)
     cfg = AppConfig.load(p)
     assert isinstance(cfg.plc.heartbeat, HeartbeatConfig)
