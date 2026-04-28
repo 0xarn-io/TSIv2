@@ -75,6 +75,7 @@ app.add_static_files("/static", str(Path(__file__).with_name("static")))
 
 dashboard = Dashboard.build(
     cameras       = cameras,
+    robot_monitor = robot,
     recipes_store = db.recipes,
     sizes_store   = db.sizes,
     errors_store  = db.errors,

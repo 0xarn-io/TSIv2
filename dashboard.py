@@ -26,6 +26,8 @@ from errors_panel   import ErrorsPanel
 from errors_store   import ErrorsStore
 from recipes_panel  import RecipesPanel
 from recipes_store  import RecipesStore
+from robot_panel    import RobotPanel
+from robot_status   import RobotMonitor
 from sizes_panel    import SizesPanel
 from sizes_store    import SizesStore
 from theme          import apply_theme, card, warak_header
@@ -54,6 +56,7 @@ def _mount_panel(panel) -> None:
 
 _TAB_SPECS: tuple[_TabSpec, ...] = (
     _TabSpec("cameras", "Cameras", "videocam",      "cameras", _mount_cameras),
+    _TabSpec("robot",   "Robot",   "smart_toy",     "robot",   _mount_panel),
     _TabSpec("recipes", "Recipes", "menu_book",     "recipes", _mount_panel),
     _TabSpec("sizes",   "Sizes",   "straighten",    "sizes",   _mount_panel),
     _TabSpec("errors",  "Errors",  "report_problem","errors",  _mount_panel),
@@ -65,6 +68,7 @@ class Dashboard:
     """Composition root for the UI. Build via `Dashboard.build(...)`."""
 
     cameras: CameraManager | None = None
+    robot:   RobotPanel    | None = None
     recipes: RecipesPanel  | None = None
     sizes:   SizesPanel    | None = None
     errors:  ErrorsPanel   | None = None
@@ -77,6 +81,7 @@ class Dashboard:
         cls,
         *,
         cameras:       CameraManager | None = None,
+        robot_monitor: RobotMonitor  | None = None,
         recipes_store: RecipesStore  | None = None,
         sizes_store:   SizesStore    | None = None,
         errors_store:  ErrorsStore   | None = None,
@@ -84,6 +89,7 @@ class Dashboard:
     ) -> "Dashboard":
         return cls(
             cameras = cameras,
+            robot   = RobotPanel(robot_monitor)   if robot_monitor else None,
             recipes = RecipesPanel(recipes_store) if recipes_store else None,
             sizes   = SizesPanel(sizes_store)     if sizes_store   else None,
             errors  = ErrorsPanel(errors_store)   if errors_store  else None,

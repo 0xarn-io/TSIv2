@@ -70,20 +70,14 @@ _HEAD_HTML = f"""
 
 @font-face {{
     font-family: 'Magistral';
-    src: url('/static/Magistral-Regular.ttf') format('truetype');
-    font-weight: 400;
+    src: url('/static/Magistral-Light.ttf') format('truetype');
+    font-weight: 300;
     font-display: swap;
 }}
 @font-face {{
     font-family: 'Magistral';
-    src: url('/static/Magistral-Medium.ttf') format('truetype');
+    src: url('/static/Magistral-Medium.otf') format('opentype');
     font-weight: 600;
-    font-display: swap;
-}}
-@font-face {{
-    font-family: 'Magistral';
-    src: url('/static/Magistral-Bold.ttf') format('truetype');
-    font-weight: 800;
     font-display: swap;
 }}
 
@@ -95,7 +89,7 @@ html, body {{
 
 .warak-title {{
     font-family: 'Magistral', 'Muli', sans-serif;
-    font-weight: 800;
+    font-weight: 600;
     letter-spacing: 0.04em;
     color: {PRIMARY};
     text-transform: uppercase;
