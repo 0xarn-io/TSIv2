@@ -9,26 +9,30 @@ from dashboard import Dashboard
 def test_build_with_all_stores_populates_all_panels() -> None:
     d = Dashboard.build(
         cameras       = MagicMock(),
+        robot_monitor = MagicMock(),
         recipes_store = MagicMock(),
         sizes_store   = MagicMock(),
         errors_store  = MagicMock(),
     )
     assert d.cameras is not None
+    assert d.robot   is not None
     assert d.recipes is not None
     assert d.sizes   is not None
     assert d.errors  is not None
     available = [t.name for t in d._available_tabs()]
-    assert available == ["cameras", "recipes", "sizes", "errors"]
+    assert available == ["cameras", "robot", "recipes", "sizes", "errors"]
 
 
 def test_build_skips_panels_for_missing_stores() -> None:
     d = Dashboard.build(
         cameras       = None,
+        robot_monitor = None,
         recipes_store = MagicMock(),
         sizes_store   = None,
         errors_store  = None,
     )
     assert d.cameras is None
+    assert d.robot   is None
     assert d.recipes is not None
     assert d.sizes   is None
     assert d.errors  is None
