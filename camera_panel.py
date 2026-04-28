@@ -12,12 +12,15 @@ Usage in main.py:
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from nicegui import ui, run
 
 from rtsp_capture import capture_as_base64
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -44,6 +47,14 @@ class CameraPanel:
         self._busy = False
         self._img:    Optional[ui.image] = None
         self._status: Optional[ui.label] = None
+        self._done_cbs: list[Callable[[str, str, bool], None]] = []
+
+    def on_snapshot_done(
+        self, cb: Callable[[str, str, bool], None],
+    ) -> Callable[[], None]:
+        """Register cb(camera_name, source, ok) called after every snapshot."""
+        self._done_cbs.append(cb)
+        return lambda: self._done_cbs.remove(cb)
 
     def build(self) -> "CameraPanel":
         """Build the NiceGUI elements. Call inside a @ui.page function."""
@@ -67,6 +78,7 @@ class CameraPanel:
         if self._busy:
             return
         self._busy = True
+        ok = False
         try:
             self._status.text = f"Capturing ({source})..."
             data_url = await run.io_bound(capture_as_base64, self.config.rtsp_url)
@@ -74,6 +86,7 @@ class CameraPanel:
                 self._img.set_source(data_url)
                 kb = len(data_url) * 3 // 4 // 1024  # base64 ≈ 4/3 of raw bytes
                 self._status.text = f"Captured via {source} ({kb} KB)"
+                ok = True
             else:
                 self._status.text = f"Capture failed ({source})"
                 ui.notify(
@@ -82,6 +95,11 @@ class CameraPanel:
                 )
         finally:
             self._busy = False
+            for cb in list(self._done_cbs):
+                try:
+                    cb(self.config.name, source, ok)
+                except Exception as e:
+                    log.warning("snapshot done callback failed: %s", e)
 
 
 class CameraManager:

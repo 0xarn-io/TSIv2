@@ -10,7 +10,10 @@ from camera_publisher import CameraPublisher, CameraTriggerConfig
 
 def _make(trigger_count: int = 2):
     cameras = MagicMock()
-    cameras.panels = {"entry": MagicMock(), "exit": MagicMock()}
+    panels = {"entry": MagicMock(), "exit": MagicMock()}
+    for p in panels.values():
+        p.on_snapshot_done.return_value = MagicMock()  # unsub fn
+    cameras.panels = panels
     plc = MagicMock()
     plc.subscribe.side_effect = lambda *_a, **_kw: (10, 20)
 
@@ -115,3 +118,75 @@ def test_empty_triggers_list_is_a_noop():
     pub.start()
     plc.validate.assert_called_once_with([])
     plc.subscribe.assert_not_called()
+
+
+# ---- ack handshake (snapshot_done → plc.write(alias, False)) ----
+
+def test_start_registers_done_callback_per_trigger():
+    pub, cameras, plc = _make()
+    pub.start()
+    cameras.panels["entry"].on_snapshot_done.assert_called_once()
+    cameras.panels["exit"].on_snapshot_done.assert_called_once()
+
+
+def test_snapshot_done_writes_false_to_plc():
+    pub, cameras, plc = _make()
+    captured = {}
+    cameras.panels["entry"].on_snapshot_done.side_effect = (
+        lambda cb: captured.setdefault("entry", cb) or MagicMock()
+    )
+    cameras.panels["exit"].on_snapshot_done.side_effect = (
+        lambda cb: captured.setdefault("exit", cb) or MagicMock()
+    )
+    pub.start()
+
+    # Simulate the entry panel finishing a snapshot.
+    captured["entry"]("entry", "trigger:entry", True)
+    plc.write.assert_called_once_with("camera.snap_entry", False)
+
+
+def test_each_done_cb_acks_its_own_alias():
+    """Loop closure regression: each panel's done cb must clear its own alias."""
+    pub, cameras, plc = _make()
+    captured = {}
+    cameras.panels["entry"].on_snapshot_done.side_effect = (
+        lambda cb: captured.setdefault("entry", cb) or MagicMock()
+    )
+    cameras.panels["exit"].on_snapshot_done.side_effect = (
+        lambda cb: captured.setdefault("exit", cb) or MagicMock()
+    )
+    pub.start()
+
+    captured["entry"]("entry", "x", True)
+    captured["exit"]("exit",   "x", True)
+
+    written = [c.args for c in plc.write.call_args_list]
+    assert ("camera.snap_entry", False) in written
+    assert ("camera.snap_exit",  False) in written
+
+
+def test_ack_swallows_write_errors():
+    pub, cameras, plc = _make()
+    captured = {}
+    cameras.panels["entry"].on_snapshot_done.side_effect = (
+        lambda cb: captured.setdefault("entry", cb) or MagicMock()
+    )
+    cameras.panels["exit"].on_snapshot_done.side_effect = (
+        lambda cb: captured.setdefault("exit", cb) or MagicMock()
+    )
+    pub.start()
+    plc.write.side_effect = RuntimeError("ADS down")
+
+    # Must not raise — failed acks shouldn't tear down the snapshot pipeline.
+    captured["entry"]("entry", "x", True)
+
+
+def test_stop_removes_done_callbacks():
+    pub, cameras, plc = _make()
+    unsubs = [MagicMock(), MagicMock()]
+    cameras.panels["entry"].on_snapshot_done.return_value = unsubs[0]
+    cameras.panels["exit"].on_snapshot_done.return_value = unsubs[1]
+    pub.start()
+    pub.stop()
+    unsubs[0].assert_called_once()
+    unsubs[1].assert_called_once()

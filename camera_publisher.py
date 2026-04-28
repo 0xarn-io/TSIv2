@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Callable
 
 from camera_panel import CameraManager
 from twincat_comm import TwinCATComm
@@ -39,6 +40,7 @@ class CameraPublisher:
         self.plc = plc
         self.triggers = list(triggers)
         self._handles: list[tuple[int, int]] = []
+        self._unsub_done: list[Callable[[], None]] = []
 
     def start(self) -> None:
         # Fail fast — both ends of the mapping must exist.
@@ -61,6 +63,13 @@ class CameraPublisher:
             handles = self.plc.subscribe(t.alias, _cb, on_change=True)
             self._handles.append(handles)
 
+            # Handshake: clear the PLC bool once the snapshot completes.
+            panel = self.cameras.panels[t.camera]
+            unsub = panel.on_snapshot_done(
+                lambda _name, _source, _ok, alias=t.alias: self._ack(alias)
+            )
+            self._unsub_done.append(unsub)
+
     def stop(self) -> None:
         for h in self._handles:
             try:
@@ -68,3 +77,14 @@ class CameraPublisher:
             except Exception as e:
                 log.warning("camera trigger unsubscribe failed: %s", e)
         self._handles.clear()
+        for u in self._unsub_done:
+            u()
+        self._unsub_done.clear()
+
+    # ---- internals ----
+
+    def _ack(self, alias: str) -> None:
+        try:
+            self.plc.write(alias, False)
+        except Exception as e:
+            log.warning("ack write %s failed: %s", alias, e)
