@@ -29,18 +29,21 @@ def _install_pysickudt_mock() -> None:
 
     @dataclass
     class UnitEvent:
-        length: float = 0.0
-        width_mean:  float = 0.0
-        width_min:   float = 0.0
-        width_max:   float = 0.0
-        height_mean: float = 0.0
-        height_min:  float = 0.0
-        height_max:  float = 0.0
-        offset_mean: float = 0.0
-        offset_min:  float = 0.0
-        offset_max:  float = 0.0
-        duration:    float = 0.0
-        samples:     int   = 0
+        # Match pysickudt.tracking.UnitEvent (https://github.com/0xarn-io/SickUDT)
+        entered_at:    float = 0.0
+        exited_at:     float = 0.0
+        duration_s:    float = 0.0
+        n_samples:     int   = 0
+        length_m:      float = 0.0
+        width_mean_m:  float = 0.0
+        width_min_m:   float = 0.0
+        width_max_m:   float = 0.0
+        height_mean_m: float = 0.0
+        height_min_m:  float = 0.0
+        height_max_m:  float = 0.0
+        offset_mean_m: float = 0.0
+        offset_min_m:  float = 0.0
+        offset_max_m:  float = 0.0
 
     class UnitTracker:
         def __init__(self, **kw):

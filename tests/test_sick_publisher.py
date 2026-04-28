@@ -30,11 +30,11 @@ def test_event_to_struct_uses_pysickudt_attrs():
     """Mock UnitEvent: every named field translates field-by-field."""
     from pysickudt import UnitEvent
     ev = UnitEvent(
-        length=2.5,
-        width_mean=0.711, width_min=0.700, width_max=0.722,
-        height_mean=1.800, height_min=1.795, height_max=1.812,
-        offset_mean=0.012, offset_min=-0.001, offset_max=0.024,
-        duration=1.234, samples=42,
+        length_m=2.5,
+        width_mean_m=0.711, width_min_m=0.700, width_max_m=0.722,
+        height_mean_m=1.800, height_min_m=1.795, height_max_m=1.812,
+        offset_mean_m=0.012, offset_min_m=-0.001, offset_max_m=0.024,
+        duration_s=1.234, n_samples=42,
     )
     out = _event_to_struct(ev)
     assert out["bNew"] is True
@@ -46,18 +46,6 @@ def test_event_to_struct_uses_pysickudt_attrs():
     assert out["nOffsetMin"]  == -1
     assert out["fDuration"]   == pytest.approx(1.234)
     assert out["nSamples"]    == 42
-
-
-def test_event_to_struct_missing_attrs_default_to_zero():
-    """If pysickudt UnitEvent loses a field, _event_to_struct shouldn't crash."""
-    class Bare:
-        length = 1.0
-        # everything else missing
-    out = _event_to_struct(Bare())
-    assert out["nLength"] == 1000
-    assert out["nWidthMean"] == 0
-    assert out["nSamples"] == 0
-    assert out["bNew"] is True
 
 
 # ---- start() validation + wiring ----

@@ -39,26 +39,21 @@ def _measurement_to_struct(m: dict) -> dict:
 
 
 def _event_to_struct(ev) -> dict:
-    """UnitEvent → ST_SickEvent (mm DINTs + REAL duration + bNew).
-
-    Attribute names follow pysickudt.UnitEvent. If your version uses
-    different names, this is the only place that needs adjustment.
-    """
-    g = lambda name, default=0.0: float(getattr(ev, name, default))
+    """pysickudt.UnitEvent → ST_SickEvent (mm DINTs + REAL duration + bNew)."""
     return {
         "bNew":        True,
-        "nLength":     int(round(g("length")      * M_TO_MM)),
-        "nWidthMean":  int(round(g("width_mean")  * M_TO_MM)),
-        "nWidthMin":   int(round(g("width_min")   * M_TO_MM)),
-        "nWidthMax":   int(round(g("width_max")   * M_TO_MM)),
-        "nHeightMean": int(round(g("height_mean") * M_TO_MM)),
-        "nHeightMin":  int(round(g("height_min")  * M_TO_MM)),
-        "nHeightMax":  int(round(g("height_max")  * M_TO_MM)),
-        "nOffsetMean": int(round(g("offset_mean") * M_TO_MM)),
-        "nOffsetMin":  int(round(g("offset_min")  * M_TO_MM)),
-        "nOffsetMax":  int(round(g("offset_max")  * M_TO_MM)),
-        "fDuration":   g("duration"),
-        "nSamples":    int(getattr(ev, "samples", 0)),
+        "nLength":     int(round(ev.length_m      * M_TO_MM)),
+        "nWidthMean":  int(round(ev.width_mean_m  * M_TO_MM)),
+        "nWidthMin":   int(round(ev.width_min_m   * M_TO_MM)),
+        "nWidthMax":   int(round(ev.width_max_m   * M_TO_MM)),
+        "nHeightMean": int(round(ev.height_mean_m * M_TO_MM)),
+        "nHeightMin":  int(round(ev.height_min_m  * M_TO_MM)),
+        "nHeightMax":  int(round(ev.height_max_m  * M_TO_MM)),
+        "nOffsetMean": int(round(ev.offset_mean_m * M_TO_MM)),
+        "nOffsetMin":  int(round(ev.offset_min_m  * M_TO_MM)),
+        "nOffsetMax":  int(round(ev.offset_max_m  * M_TO_MM)),
+        "fDuration":   float(ev.duration_s),
+        "nSamples":    int(ev.n_samples),
     }
 
 
@@ -120,9 +115,6 @@ class SickPublisher:
             log.warning("live publish failed: %s", e)
 
     def _on_event(self, ev) -> None:
-        if not getattr(self, "_logged_event_shape", False):
-            log.info("UnitEvent sample: %r", ev)
-            self._logged_event_shape = True
         s = _event_to_struct(ev)
         log.info("event w=%d h=%d off=%d", s["nWidthMean"], s["nHeightMean"], s["nOffsetMean"])
         try:
