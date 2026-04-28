@@ -112,6 +112,15 @@ nWidth  = "DINT"
 nHeight = "DINT"
 nOffset = "DINT"
 
+[structs.ST_RobotStatus]
+bReady       = "BOOL"
+bMotorsOn    = "BOOL"
+bAutoMode    = "BOOL"
+bRunning     = "BOOL"
+bGuardStop   = "BOOL"
+bEStop       = "BOOL"
+nSpeedRatio  = "DINT"
+
 [groups.sick]
 prefix = ""
 
@@ -125,6 +134,12 @@ prefix = ""
 
 [groups.health.vars]
 heartbeat = { name = "GVL.nHeartbeat", type = "UDINT" }
+
+[groups.robot]
+prefix = ""
+
+[groups.robot.vars]
+status = { name = "GVL.RobotStatus", type = "ST_RobotStatus" }
 """)
     return p
 

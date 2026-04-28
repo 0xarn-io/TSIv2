@@ -17,6 +17,11 @@ enable_cycle_ms = 100
 alias     = "health.heartbeat"
 period_ms = 1000
 
+# Optional: publish robot status struct to the PLC. Requires [robot]
+# below to be present too. Comment out either to disable.
+[plc.robot_status]
+status_alias = "robot.status"
+
 # Map PLC bool aliases (in plc_signals.toml) to camera names (below).
 # Rising edge on the PLC bool fires a snapshot from that camera.
 [[plc.camera_triggers]]
@@ -65,3 +70,13 @@ width_mm  = 635
 height_mm = 1000
 depth_mm  = 1778
 x_pos     = 2.0
+
+# Optional: ABB OmniCore RWS monitor. Comment out [robot] to skip the
+# whole module (no thread, no HTTP calls, no PLC writes).
+[robot]
+ip         = "192.168.125.1"
+username   = "Admin"
+password   = "robotics"
+verify_ssl = false
+poll_ms    = 2000
+timeout_s  = 2.0

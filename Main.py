@@ -35,6 +35,8 @@ from camera_panel     import CameraManager
 from camera_publisher import CameraPublisher
 from config           import AppConfig
 from plc_heartbeat    import PLCHeartbeat
+from robot_publisher  import RobotPublisher
+from robot_status     import RobotMonitor
 from sick_bridge      import SickBridge
 from sick_publisher   import SickPublisher
 from twincat_comm     import TwinCATComm
@@ -53,6 +55,9 @@ publisher = SickPublisher(bridge, plc, cfg.plc.publisher)
 cameras   = CameraManager.from_config(cfg.cameras)
 cam_pub   = CameraPublisher(cameras, plc, cfg.plc.camera_triggers)
 heartbeat = PLCHeartbeat(plc, cfg.plc.heartbeat) if cfg.plc.heartbeat else None
+robot     = RobotMonitor.from_config(cfg.robot) if cfg.robot else None
+robot_pub = (RobotPublisher(robot, plc, cfg.plc.robot_status)
+             if robot and cfg.plc.robot_status else None)
 scene     = BoxScene.from_config(cfg.boxes)
 
 
@@ -73,10 +78,14 @@ def _startup() -> None:
     publisher.start()
     cam_pub.start()
     if heartbeat: heartbeat.start()
+    if robot:     robot.start()
+    if robot_pub: robot_pub.start()
 
 
 @app.on_shutdown
 def _shutdown() -> None:
+    if robot_pub: robot_pub.stop()
+    if robot:     robot.stop()
     if heartbeat: heartbeat.stop()
     cam_pub.stop()
     publisher.stop()
