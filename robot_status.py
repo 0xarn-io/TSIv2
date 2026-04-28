@@ -45,14 +45,32 @@ class RobotStatus:
     speed_ratio: int = 0           # 0–100
     last_polled: float = 0.0       # time.monotonic() of last successful poll
 
+    # ---- derived bool flags (the PLC-friendly view) ----
+
+    @property
+    def motors_on(self) -> bool:
+        return self.ctrl_state == "motoron"
+
+    @property
+    def auto_mode(self) -> bool:
+        return self.opmode == "AUTO"
+
+    @property
+    def running(self) -> bool:
+        return self.exec_state == "running"
+
+    @property
+    def guard_stop(self) -> bool:
+        return self.ctrl_state == "guardstop"
+
+    @property
+    def estop(self) -> bool:
+        return "emergencystop" in self.ctrl_state.lower()
+
     @property
     def is_ready(self) -> bool:
-        """Robot is ready to run: motors on AND auto mode AND RAPID running."""
-        return (
-            self.ctrl_state == "motoron"
-            and self.opmode    == "AUTO"
-            and self.exec_state == "running"
-        )
+        """All-good gate: motors on AND auto mode AND RAPID running."""
+        return self.motors_on and self.auto_mode and self.running
 
 
 class RobotMonitor:
@@ -94,7 +112,7 @@ class RobotMonitor:
     def on_change(
         self, cb: Callable[[RobotStatus], None],
     ) -> Callable[[], None]:
-        """Fires when is_ready transitions. Returns an unsubscribe function."""
+        """Fires whenever any tracked field changes. Returns an unsubscribe fn."""
         self._change_cbs.append(cb)
         return lambda: self._change_cbs.remove(cb)
 
@@ -142,7 +160,7 @@ class RobotMonitor:
             self._poll()
 
     def _poll(self) -> None:
-        prev_ready = self.status().is_ready
+        prev = self.status()
 
         ctrl = self._get("/rw/panel/ctrlstate")
         opm  = self._get("/rw/panel/opmode")
@@ -159,10 +177,14 @@ class RobotMonitor:
         with self._lock:
             self._status = new
 
-        if new.is_ready != prev_ready:
+        # Compare on the fields we care about (skip last_polled — always changes).
+        if (new.ctrl_state, new.opmode, new.exec_state, new.speed_ratio) != (
+            prev.ctrl_state, prev.opmode, prev.exec_state, prev.speed_ratio
+        ):
             log.info(
-                "robot: ready=%d (%s/%s/%s)",
+                "robot: ready=%d (%s/%s/%s @ %d%%)",
                 int(new.is_ready), new.ctrl_state, new.opmode, new.exec_state,
+                new.speed_ratio,
             )
             for cb in list(self._change_cbs):
                 try:

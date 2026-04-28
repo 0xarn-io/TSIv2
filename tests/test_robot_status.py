@@ -38,6 +38,26 @@ def test_is_ready(ctrl, opmode, exec_, expected):
     assert s.is_ready is expected
 
 
+def test_individual_status_flags():
+    s = RobotStatus(ctrl_state="motoron", opmode="AUTO", exec_state="running")
+    assert s.motors_on  is True
+    assert s.auto_mode  is True
+    assert s.running    is True
+    assert s.guard_stop is False
+    assert s.estop      is False
+
+    s = RobotStatus(ctrl_state="guardstop", opmode="MANR", exec_state="stopped")
+    assert s.motors_on  is False
+    assert s.auto_mode  is False
+    assert s.running    is False
+    assert s.guard_stop is True
+
+    s = RobotStatus(ctrl_state="emergencystop")
+    assert s.estop is True
+    s = RobotStatus(ctrl_state="emergencystopreset")
+    assert s.estop is True
+
+
 # ---- HAL+JSON helpers ----
 
 def test_state_extracts_first_match():
@@ -92,20 +112,24 @@ def test_poll_handles_missing_responses():
     assert s.is_ready is False
 
 
-def test_on_change_fires_on_ready_transition():
-    m = _make_monitor({
+def test_on_change_fires_on_any_field_change():
+    """on_change fires whenever any tracked field changes, not just is_ready."""
+    state = {
         "/rw/panel/ctrlstate":   {"state": [{"ctrlstate": "motoron"}]},
         "/rw/panel/opmode":      {"state": [{"opmode": "AUTO"}]},
         "/rw/rapid/execution":   {"state": [{"ctrlexecstate": "running"}]},
         "/rw/panel/speedratio":  {"state": [{"speedratio": "100"}]},
-    })
+    }
+    m = _make_monitor(state)
     seen = []
-    m.on_change(lambda s: seen.append(s.is_ready))
+    m.on_change(lambda s: seen.append((s.is_ready, s.speed_ratio)))
 
-    m._poll()                          # not_ready (False) → ready (True): fires
-    m._poll()                          # ready → ready: no fire
+    m._poll()       # initial: unknown → motoron/AUTO/running/100 — fires
+    m._poll()       # no change — no fire
+    state["/rw/panel/speedratio"] = {"state": [{"speedratio": "50"}]}
+    m._poll()       # speed dropped — fires (even though is_ready unchanged)
 
-    assert seen == [True]
+    assert seen == [(True, 100), (True, 50)]
 
 
 def test_on_change_unsubscribe():

@@ -17,10 +17,10 @@ enable_cycle_ms = 100
 alias     = "health.heartbeat"
 period_ms = 1000
 
-# Optional: mirror RobotMonitor.is_ready to a PLC bool. Requires [robot]
+# Optional: publish robot status struct to the PLC. Requires [robot]
 # below to be present too. Comment out either to disable.
 [plc.robot_status]
-ready_alias = "robot.ready"
+status_alias = "robot.status"
 
 # Map PLC bool aliases (in plc_signals.toml) to camera names (below).
 # Rising edge on the PLC bool fires a snapshot from that camera.

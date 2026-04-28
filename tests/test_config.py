@@ -112,7 +112,7 @@ event_alias = "sick.event"
 live_alias = "sick.live"
 enable_alias = "sick.enable"
 [plc.robot_status]
-ready_alias = "robot.ready"
+status_alias = "robot.status"
 [scanner]
 udp_port_a = 2111
 udp_port_b = 2112
@@ -141,7 +141,7 @@ poll_ms = 1500
     assert cfg.robot.ip == "192.168.125.1"
     assert cfg.robot.poll_ms == 1500
     assert isinstance(cfg.plc.robot_status, RobotStatusConfig)
-    assert cfg.plc.robot_status.ready_alias == "robot.ready"
+    assert cfg.plc.robot_status.status_alias == "robot.status"
 
 
 def test_heartbeat_loads_when_present(tmp_path: Path, signals_toml: Path):

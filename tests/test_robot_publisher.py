@@ -1,36 +1,73 @@
-"""Tests for RobotPublisher: mirror RobotMonitor.is_ready to a PLC bool."""
+"""Tests for RobotPublisher: write ST_RobotStatus struct on every change."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
 import pytest
 
-from robot_publisher import RobotPublisher, RobotStatusConfig
+from robot_publisher import RobotPublisher, RobotStatusConfig, _status_to_struct
 from robot_status    import RobotStatus
 
 
-def _make(initial_ready: bool = False):
+def _make(initial: RobotStatus | None = None):
     monitor = MagicMock()
-    monitor.status.return_value = RobotStatus(
-        ctrl_state="motoron" if initial_ready else "motoroff",
-        opmode="AUTO",
-        exec_state="running" if initial_ready else "stopped",
-    )
+    monitor.status.return_value = initial or RobotStatus()
     plc = MagicMock()
-    cfg = RobotStatusConfig(ready_alias="robot.ready")
+    cfg = RobotStatusConfig(status_alias="robot.status")
     return RobotPublisher(monitor, plc, cfg), monitor, plc
 
+
+# ---- struct translation ----
+
+def test_status_to_struct_ready():
+    s = RobotStatus(
+        ctrl_state="motoron", opmode="AUTO", exec_state="running",
+        speed_ratio=80,
+    )
+    out = _status_to_struct(s)
+    assert out == {
+        "bReady":      True,
+        "bMotorsOn":   True,
+        "bAutoMode":   True,
+        "bRunning":    True,
+        "bGuardStop":  False,
+        "bEStop":      False,
+        "nSpeedRatio": 80,
+    }
+
+
+def test_status_to_struct_guard_stop():
+    s = RobotStatus(ctrl_state="guardstop", opmode="AUTO", exec_state="stopped")
+    out = _status_to_struct(s)
+    assert out["bGuardStop"] is True
+    assert out["bMotorsOn"]  is False
+    assert out["bReady"]     is False
+
+
+def test_status_to_struct_estop():
+    s = RobotStatus(ctrl_state="emergencystop")
+    out = _status_to_struct(s)
+    assert out["bEStop"] is True
+
+
+# ---- lifecycle ----
 
 def test_start_validates_alias():
     pub, monitor, plc = _make()
     pub.start()
-    plc.validate.assert_called_once_with(["robot.ready"])
+    plc.validate.assert_called_once_with(["robot.status"])
 
 
 def test_start_publishes_initial_state():
-    pub, monitor, plc = _make(initial_ready=True)
+    """Initial publish on start so the PLC bool isn't stale at boot."""
+    pub, monitor, plc = _make(RobotStatus(
+        ctrl_state="motoron", opmode="AUTO", exec_state="running", speed_ratio=100,
+    ))
     pub.start()
-    plc.write.assert_called_with("robot.ready", True)
+    plc.write.assert_called_once_with("robot.status", _status_to_struct(
+        RobotStatus(ctrl_state="motoron", opmode="AUTO", exec_state="running",
+                    speed_ratio=100)
+    ))
 
 
 def test_start_subscribes_to_monitor():
@@ -39,19 +76,25 @@ def test_start_subscribes_to_monitor():
     monitor.on_change.assert_called_once()
 
 
-def test_change_callback_writes_to_plc():
+def test_change_callback_writes_struct():
     pub, monitor, plc = _make()
     captured = {}
     monitor.on_change.side_effect = (
         lambda cb: captured.setdefault("cb", cb) or MagicMock()
     )
     pub.start()
-    plc.reset_mock()  # clear the initial publish
+    plc.reset_mock()        # clear initial publish
 
     captured["cb"](RobotStatus(
-        ctrl_state="motoron", opmode="AUTO", exec_state="running",
+        ctrl_state="guardstop", opmode="MANR", exec_state="stopped",
+        speed_ratio=10,
     ))
-    plc.write.assert_called_once_with("robot.ready", True)
+    plc.write.assert_called_once()
+    alias, struct = plc.write.call_args.args
+    assert alias == "robot.status"
+    assert struct["bGuardStop"]  is True
+    assert struct["bAutoMode"]   is False
+    assert struct["nSpeedRatio"] == 10
 
 
 def test_publish_swallows_write_errors():

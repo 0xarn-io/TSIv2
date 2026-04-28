@@ -25,6 +25,15 @@ nWidth  = "DINT"
 nHeight = "DINT"
 nOffset = "DINT"
 
+[structs.ST_RobotStatus]
+bReady       = "BOOL"
+bMotorsOn    = "BOOL"
+bAutoMode    = "BOOL"
+bRunning     = "BOOL"
+bGuardStop   = "BOOL"
+bEStop       = "BOOL"
+nSpeedRatio  = "DINT"
+
 [groups.sick]
 prefix = "pyADS"   # GVL with {attribute 'qualified_only'} → use bare name
 
@@ -50,4 +59,4 @@ heartbeat = { name = "nHeartbeat", type = "UDINT" }
 prefix = "pyADS"
 
 [groups.robot.vars]
-ready = { name = "bRobotReady", type = "BOOL" }
+status = { name = "RobotStatus", type = "ST_RobotStatus" }
