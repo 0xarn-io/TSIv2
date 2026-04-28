@@ -117,12 +117,13 @@ class TwinCATConfig:
                 ordered[fname] = ftype_u
                 ctypes_fields.append((fname, PRIMITIVE_TYPES[ftype_u][1]))
 
-            # TwinCAT default: 1-byte packed. If you use {attribute 'pack_mode'},
-            # adjust _pack_ to match (1, 2, 4, or 8).
+            # TwinCAT 3 default pack_mode is 8. If a struct in the PLC has
+            # {attribute 'pack_mode' := '1'} (or 2/4), set _pack_ accordingly
+            # — easiest is to add a TOML option later if you actually use it.
             cls_ = type(
                 sname,
                 (ctypes.Structure,),
-                {"_pack_": 1, "_fields_": ctypes_fields},
+                {"_pack_": 8, "_fields_": ctypes_fields},
             )
             out[sname] = StructDef(name=sname, fields=ordered, ctypes_class=cls_)
         return out

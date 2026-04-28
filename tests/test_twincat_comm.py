@@ -27,6 +27,42 @@ def test_from_toml_builds_structs(signals_toml: Path):
     assert live.size == 12
 
 
+def test_struct_alignment_matches_twincat3_default():
+    """ST_SickEvent must layout to 52 bytes (TwinCAT 3 default pack_mode=8).
+
+    BOOL(1) + pad(3) + 10×DINT(4) + REAL(4) + DINT(4) = 52
+    Wrong _pack_ = 1 gave 49 bytes and shifted every field after bNew → garbage.
+    """
+    import tempfile, textwrap
+    with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as f:
+        f.write(textwrap.dedent("""
+            [ams]
+            net_id = "1.2.3.4.1.1"
+            port = 851
+            [structs.ST_SickEvent]
+            bNew=  "BOOL"
+            nLength= "DINT"
+            nWidthMean= "DINT"
+            nWidthMin=  "DINT"
+            nWidthMax=  "DINT"
+            nHeightMean="DINT"
+            nHeightMin= "DINT"
+            nHeightMax= "DINT"
+            nOffsetMean="DINT"
+            nOffsetMin= "DINT"
+            nOffsetMax= "DINT"
+            fDuration=  "REAL"
+            nSamples=   "DINT"
+            [groups.x]
+            prefix = ""
+            [groups.x.vars]
+            ev = { name = "Ev", type = "ST_SickEvent" }
+        """))
+        path = f.name
+    cfg = TwinCATConfig.from_toml(path)
+    assert cfg.structs["ST_SickEvent"].size == 52
+
+
 def test_from_toml_builds_aliases(signals_toml: Path):
     cfg = TwinCATConfig.from_toml(signals_toml)
     assert set(cfg.variables) == {"sick.event", "sick.live", "sick.enable"}
