@@ -56,7 +56,7 @@ def _mount_panel(panel) -> None:
 
 _TAB_SPECS: tuple[_TabSpec, ...] = (
     _TabSpec("cameras", "Cameras", "videocam",      "cameras", _mount_cameras),
-    _TabSpec("robot",   "Robot",   "smart_toy",     "robot",   _mount_panel),
+    _TabSpec("robot",   "Robot",   "precision_manufacturing", "robot",   _mount_panel),
     _TabSpec("recipes", "Recipes", "menu_book",     "recipes", _mount_panel),
     _TabSpec("sizes",   "Sizes",   "straighten",    "sizes",   _mount_panel),
     _TabSpec("errors",  "Errors",  "report_problem","errors",  _mount_panel),

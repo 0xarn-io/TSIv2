@@ -44,7 +44,7 @@ class RobotPanel:
     def _render_summary_card(self) -> None:
         with card():
             with ui.row().classes("items-center gap-4 w-full"):
-                ui.icon("smart_toy").classes("text-5xl text-[#0053A1]")
+                ui.icon("precision_manufacturing").classes("text-5xl text-[#0053A1]")
                 with ui.column().classes("gap-0 flex-grow"):
                     self._labels["headline"] = ui.label("…").classes(
                         "text-xl font-semibold"
