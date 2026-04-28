@@ -16,6 +16,8 @@ from box_scene        import BoxConfig
 from camera_panel     import CameraConfig
 from camera_publisher import CameraTriggerConfig
 from plc_heartbeat    import HeartbeatConfig
+from robot_publisher  import RobotStatusConfig
+from robot_status     import RobotConfig
 from sick_publisher   import PublisherConfig
 
 
@@ -25,6 +27,7 @@ class PLCSettings:
     publisher:       PublisherConfig
     camera_triggers: list[CameraTriggerConfig]
     heartbeat:       HeartbeatConfig | None
+    robot_status:    RobotStatusConfig | None
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,7 @@ class AppConfig:
     ui:      UISettings
     cameras: list[CameraConfig]
     boxes:   list[BoxConfig]
+    robot:   RobotConfig | None
 
     @classmethod
     def load(cls, path: str | Path) -> "AppConfig":
@@ -73,10 +77,15 @@ class AppConfig:
                     HeartbeatConfig(**d["plc"]["heartbeat"])
                     if "heartbeat" in d["plc"] else None
                 ),
+                robot_status=(
+                    RobotStatusConfig(**d["plc"]["robot_status"])
+                    if "robot_status" in d["plc"] else None
+                ),
             ),
             scanner=ScannerSettings(**d["scanner"]),
             ui=UISettings(**d["ui"]),
             cameras=[CameraConfig(name=c["name"], rtsp_url=c["url"])
                      for c in d["cameras"]],
             boxes=[BoxConfig(**b) for b in d["boxes"]],
+            robot=(RobotConfig(**d["robot"]) if "robot" in d else None),
         )

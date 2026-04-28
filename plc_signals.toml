@@ -45,3 +45,9 @@ prefix = "pyADS"
 
 [groups.health.vars]
 heartbeat = { name = "nHeartbeat", type = "UDINT" }
+
+[groups.robot]
+prefix = "pyADS"
+
+[groups.robot.vars]
+ready = { name = "bRobotReady", type = "BOOL" }

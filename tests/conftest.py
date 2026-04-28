@@ -125,6 +125,12 @@ prefix = ""
 
 [groups.health.vars]
 heartbeat = { name = "GVL.nHeartbeat", type = "UDINT" }
+
+[groups.robot]
+prefix = ""
+
+[groups.robot.vars]
+ready = { name = "GVL.bRobotReady", type = "BOOL" }
 """)
     return p
 

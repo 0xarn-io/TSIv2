@@ -66,7 +66,8 @@ def test_struct_alignment_matches_twincat3_default():
 def test_from_toml_builds_aliases(signals_toml: Path):
     cfg = TwinCATConfig.from_toml(signals_toml)
     assert set(cfg.variables) == {
-        "sick.event", "sick.live", "sick.enable", "health.heartbeat",
+        "sick.event", "sick.live", "sick.enable",
+        "health.heartbeat", "robot.ready",
     }
     enable = cfg.variables["sick.enable"]
     assert enable.symbol == "GVL_Sick.bEnable"
