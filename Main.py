@@ -10,7 +10,7 @@
 #   V1.2                amontplet                   28/04/2026
 
 
-"""Main.py — composition root.
+"""Main.py — composition root
 
 Build → register routes → run. No UI primitives here; UI lives in
 `dashboard.py` and the per-feature panels. The data + hardware layers
