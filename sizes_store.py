@@ -1,16 +1,15 @@
 """sizes_store.py — SQLite CRUD for size catalogs.
 
 One DB with two tables, `cardboard` and `others`, both with the same shape:
-    id, name, width_mm, length_mm, width_in, length_in
+    id, name, width_mm, length_mm
 
-Operators edit sizes via NiceGUI; callers pick the table by name. mm values
-are integers (manufacturing tolerance), inch values are floats.
+mm is the canonical unit. The UI offers an inches → mm helper (US shops
+quote in inches) but only mm is persisted.
 
 Usage:
     sizes = SizesStore.from_config(cfg.sizes)
     sizes.start()
-    sid = sizes.add("cardboard", Size(name="A4", width_mm=210, length_mm=297,
-                                      width_in=8.27, length_in=11.69))
+    sid = sizes.add("cardboard", Size(name="35x70", width_mm=889, length_mm=1778))
     s = sizes.get("cardboard", sid)
     sizes.list("others")
     sizes.stop()
@@ -36,8 +35,6 @@ CREATE TABLE IF NOT EXISTS cardboard (
     name       TEXT    NOT NULL,
     width_mm   INTEGER NOT NULL,
     length_mm  INTEGER NOT NULL,
-    width_in   REAL    NOT NULL,
-    length_in  REAL    NOT NULL,
     created_at TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT
 );
@@ -46,14 +43,12 @@ CREATE TABLE IF NOT EXISTS others (
     name       TEXT    NOT NULL,
     width_mm   INTEGER NOT NULL,
     length_mm  INTEGER NOT NULL,
-    width_in   REAL    NOT NULL,
-    length_in  REAL    NOT NULL,
     created_at TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT
 );
 """
 
-_COLS = ("name", "width_mm", "length_mm", "width_in", "length_in")
+_COLS = ("name", "width_mm", "length_mm")
 
 
 @dataclass(frozen=True)
@@ -66,8 +61,6 @@ class Size:
     name:      str
     width_mm:  int
     length_mm: int
-    width_in:  float
-    length_in: float
     id:        int | None = None       # None until persisted
 
 
@@ -75,10 +68,8 @@ def _row_to_size(row: sqlite3.Row) -> Size:
     return Size(
         id        = row["id"],
         name      = row["name"],
-        width_mm  = row["width_mm"],
-        length_mm = row["length_mm"],
-        width_in  = row["width_in"],
-        length_in = row["length_in"],
+        width_mm  = int(row["width_mm"]),
+        length_mm = int(row["length_mm"]),
     )
 
 

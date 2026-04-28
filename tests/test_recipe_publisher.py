@@ -1,6 +1,11 @@
-"""Tests for RecipePublisher: subscribe → DB lookup → setpoints struct write."""
+"""Tests for RecipePublisher: subscribe → DB lookup → setpoints struct write.
+
+Writes run on a worker thread, so tests block until the queue is drained
+(via _drain) before asserting on plc.write side effects.
+"""
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,6 +14,17 @@ from recipe_publisher import (
     RecipePublisher, RecipePublisherConfig, _recipe_to_struct,
 )
 from recipes_store import Recipe
+
+
+def _drain(pub: RecipePublisher, timeout: float = 1.0) -> None:
+    """Wait until the writer queue is empty (worker has consumed everything)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pub._queue.empty():
+            time.sleep(0.02)        # let worker finish the current item
+            return
+        time.sleep(0.01)
+    raise AssertionError("worker did not drain in time")
 
 
 def _recipe(code: int = 1, **overrides) -> Recipe:
@@ -54,7 +70,10 @@ def test_recipe_to_struct_maps_all_fields():
 def test_start_validates_aliases():
     pub, recipes, plc = _make()
     pub.start()
-    plc.validate.assert_called_once_with(["recipe.code", "recipe.setpoints"])
+    try:
+        plc.validate.assert_called_once_with(["recipe.code", "recipe.setpoints"])
+    finally:
+        pub.stop()
 
 
 def test_start_pushes_initial_recipe():
@@ -63,12 +82,15 @@ def test_start_pushes_initial_recipe():
     recipes.get.return_value = _recipe(code=7, x_topsheet_length=999)
 
     pub.start()
-
-    recipes.get.assert_called_with(7)
-    plc.write.assert_called_once()
-    alias, struct = plc.write.call_args.args
-    assert alias == "recipe.setpoints"
-    assert struct["nXTopsheetLength"] == 999
+    try:
+        _drain(pub)
+        recipes.get.assert_called_with(7)
+        plc.write.assert_called_once()
+        alias, struct = plc.write.call_args.args
+        assert alias == "recipe.setpoints"
+        assert struct["nXTopsheetLength"] == 999
+    finally:
+        pub.stop()
 
 
 def test_start_handles_unknown_initial_code(caplog):
@@ -78,8 +100,27 @@ def test_start_handles_unknown_initial_code(caplog):
     import logging
     with caplog.at_level(logging.WARNING, logger="recipe_publisher"):
         pub.start()
+        try:
+            _drain(pub)
+        finally:
+            pub.stop()
     plc.write.assert_not_called()
     assert any("recipe code 42 not found" in r.message for r in caplog.records)
+
+
+def test_start_skips_code_zero_silently(caplog):
+    """code=0 means 'no selection' — must not query the DB or warn."""
+    pub, recipes, plc = _make(initial_code=0)
+    import logging
+    with caplog.at_level(logging.WARNING, logger="recipe_publisher"):
+        pub.start()
+        try:
+            _drain(pub)
+        finally:
+            pub.stop()
+    recipes.get.assert_not_called()
+    plc.write.assert_not_called()
+    assert not any("not found" in r.message for r in caplog.records)
 
 
 def test_start_handles_initial_read_failure(caplog):
@@ -88,8 +129,11 @@ def test_start_handles_initial_read_failure(caplog):
     import logging
     with caplog.at_level(logging.WARNING, logger="recipe_publisher"):
         pub.start()
-    # Subscription still registered despite the read failure.
-    plc.subscribe.assert_called_once()
+        try:
+            # Subscription still registered despite the read failure.
+            plc.subscribe.assert_called_once()
+        finally:
+            pub.stop()
     assert any("initial recipe read failed" in r.message for r in caplog.records)
 
 
@@ -99,8 +143,11 @@ def test_start_handles_subscription_failure(caplog):
     plc.subscribe.side_effect = RuntimeError("symbol not found (1808)")
     import logging
     with caplog.at_level(logging.WARNING, logger="recipe_publisher"):
-        pub.start()                                  # must not raise
-    assert pub._handles is None
+        pub.start()
+        try:
+            assert pub._handles is None
+        finally:
+            pub.stop()
     assert any("subscription failed" in r.message for r in caplog.records)
 
 
@@ -114,20 +161,25 @@ def test_subscribe_callback_writes_setpoints():
     plc.subscribe.side_effect = fake_subscribe
 
     pub.start()
-    plc.reset_mock()
-    recipes.get.return_value = _recipe(
-        code=5, x_topsheet_length=500, y_topsheet_length=1500, wood=True,
-    )
+    try:
+        _drain(pub)                                  # initial code=0 path
+        plc.reset_mock()
+        recipes.get.return_value = _recipe(
+            code=5, x_topsheet_length=500, y_topsheet_length=1500, wood=True,
+        )
 
-    captured["cb"]("recipe.code", 5)
+        captured["cb"]("recipe.code", 5)
+        _drain(pub)
 
-    recipes.get.assert_called_with(5)
-    plc.write.assert_called_once()
-    alias, struct = plc.write.call_args.args
-    assert alias == "recipe.setpoints"
-    assert struct["nXTopsheetLength"] == 500
-    assert struct["nYTopsheetLength"] == 1500
-    assert struct["bWood"] is True
+        recipes.get.assert_called_with(5)
+        plc.write.assert_called_once()
+        alias, struct = plc.write.call_args.args
+        assert alias == "recipe.setpoints"
+        assert struct["nXTopsheetLength"] == 500
+        assert struct["nYTopsheetLength"] == 1500
+        assert struct["bWood"] is True
+    finally:
+        pub.stop()
 
 
 def test_callback_unknown_code_is_warned_not_written(caplog):
@@ -137,15 +189,20 @@ def test_callback_unknown_code_is_warned_not_written(caplog):
         lambda alias, cb, **_: captured.setdefault("cb", cb) or ("n", "u")
     )
     pub.start()
-    plc.reset_mock()
-    recipes.get.return_value = None
+    try:
+        _drain(pub)
+        plc.reset_mock()
+        recipes.get.return_value = None
 
-    import logging
-    with caplog.at_level(logging.WARNING, logger="recipe_publisher"):
-        captured["cb"]("recipe.code", 999)
+        import logging
+        with caplog.at_level(logging.WARNING, logger="recipe_publisher"):
+            captured["cb"]("recipe.code", 999)
+            _drain(pub)
 
-    plc.write.assert_not_called()
-    assert any("recipe code 999 not found" in r.message for r in caplog.records)
+        plc.write.assert_not_called()
+        assert any("recipe code 999 not found" in r.message for r in caplog.records)
+    finally:
+        pub.stop()
 
 
 def test_write_failure_swallowed():
@@ -155,9 +212,15 @@ def test_write_failure_swallowed():
         lambda alias, cb, **_: captured.setdefault("cb", cb) or ("n", "u")
     )
     pub.start()
-    recipes.get.return_value = _recipe(code=1)
-    plc.write.side_effect = RuntimeError("ADS gone")
-    captured["cb"]("recipe.code", 1)            # must not raise
+    try:
+        recipes.get.return_value = _recipe(code=1)
+        plc.write.side_effect = RuntimeError("ADS gone")
+        captured["cb"]("recipe.code", 1)            # must not raise
+        _drain(pub)                                 # worker must not die either
+        # Worker is still alive after a write failure.
+        assert pub._worker is not None and pub._worker.is_alive()
+    finally:
+        pub.stop()
 
 
 def test_stop_unsubscribes():
@@ -172,5 +235,13 @@ def test_stop_idempotent():
     pub, recipes, plc = _make()
     pub.start()
     pub.stop()
-    pub.stop()                                  # must not raise
+    pub.stop()                                      # must not raise
     plc.unsubscribe.assert_called_once()
+
+
+def test_stop_joins_worker():
+    pub, recipes, plc = _make()
+    pub.start()
+    assert pub._worker is not None
+    pub.stop()
+    assert pub._worker is None

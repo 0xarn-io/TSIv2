@@ -21,6 +21,11 @@ from sizes_store import Size, SizesStore, TABLES
 log = logging.getLogger(__name__)
 
 
+def _mm_to_in(mm: int) -> int:
+    """Display-only conversion. Round to nearest inch (matches operator quotes)."""
+    return int(round(mm / 25.4))
+
+
 class SizesPanel:
     """Admin UI for cardboard + others size catalogs."""
 
@@ -79,8 +84,8 @@ class SizesPanel:
             ui.label("Name").classes("w-40")
             ui.label("W (mm)").classes("w-24 text-right")
             ui.label("L (mm)").classes("w-24 text-right")
-            ui.label("W (in)").classes("w-24 text-right")
-            ui.label("L (in)").classes("w-24 text-right")
+            ui.label("≈ W (in)").classes("w-24 text-right text-gray-500")
+            ui.label("≈ L (in)").classes("w-24 text-right text-gray-500")
             ui.label("").classes("flex-grow")
 
     def _render_row(self, table: str, s: Size) -> None:
@@ -89,8 +94,8 @@ class SizesPanel:
             ui.label(s.name).classes("w-40")
             ui.label(str(s.width_mm)).classes("w-24 text-right")
             ui.label(str(s.length_mm)).classes("w-24 text-right")
-            ui.label(f"{s.width_in:.2f}").classes("w-24 text-right")
-            ui.label(f"{s.length_in:.2f}").classes("w-24 text-right")
+            ui.label(str(_mm_to_in(s.width_mm))).classes("w-24 text-right text-gray-500")
+            ui.label(str(_mm_to_in(s.length_mm))).classes("w-24 text-right text-gray-500")
             with ui.row().classes("flex-grow justify-end gap-1"):
                 ui.button(
                     icon="edit",
@@ -110,19 +115,23 @@ class SizesPanel:
             ui.label(title).classes("text-lg font-bold")
 
             name = ui.input("Name", value=existing.name if existing else "")
-            wmm  = ui.number("Width (mm)",  value=existing.width_mm  if existing else 0,   format="%d")
-            lmm  = ui.number("Length (mm)", value=existing.length_mm if existing else 0,   format="%d")
-            win  = ui.number("Width (in)",  value=existing.width_in  if existing else 0.0, format="%.2f")
-            lin  = ui.number("Length (in)", value=existing.length_in if existing else 0.0, format="%.2f")
+            wmm  = ui.number("Width (mm)",  value=existing.width_mm  if existing else 0, format="%d")
+            lmm  = ui.number("Length (mm)", value=existing.length_mm if existing else 0, format="%d")
 
-            def fill_inches_from_mm() -> None:
-                # 1 in = 25.4 mm
-                win.value = round(float(wmm.value or 0) / 25.4, 2)
-                lin.value = round(float(lmm.value or 0) / 25.4, 2)
+            ui.label("Inches calculator (not stored)").classes(
+                "text-xs text-gray-500 mt-2"
+            )
+            win  = ui.number("Width (in)",  value=_mm_to_in(existing.width_mm)  if existing else 0, format="%d")
+            lin  = ui.number("Length (in)", value=_mm_to_in(existing.length_mm) if existing else 0, format="%d")
+
+            def fill_mm_from_inches() -> None:
+                # 1 in = 25.4 mm; round to nearest mm
+                wmm.value = int(round(float(win.value or 0) * 25.4))
+                lmm.value = int(round(float(lin.value or 0) * 25.4))
 
             ui.button(
-                "Fill inches from mm", icon="swap_horiz",
-                on_click=fill_inches_from_mm,
+                "Fill mm from inches", icon="swap_horiz",
+                on_click=fill_mm_from_inches,
             ).props("flat dense")
 
             def submit() -> None:
@@ -132,8 +141,6 @@ class SizesPanel:
                         name=(name.value or "").strip(),
                         width_mm=int(wmm.value or 0),
                         length_mm=int(lmm.value or 0),
-                        width_in=float(win.value or 0.0),
-                        length_in=float(lin.value or 0.0),
                     )
                     if not s.name:
                         ui.notify("Name is required", type="warning")

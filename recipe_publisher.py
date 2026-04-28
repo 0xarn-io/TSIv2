@@ -4,12 +4,16 @@ When the PLC writes a new value to `cfg.code_alias` (DINT), this module
 looks the recipe up in `RecipesStore` and writes the matching setpoints
 struct to `cfg.setpoints_alias` (ST_RecipeSetpoints).
 
-Mirrors the SickPublisher / RobotPublisher pattern: subscribe → translate →
-write. No state of its own beyond the subscription handle.
+Threading: notifications run on pyads's AmsRouter thread; making sync ADS
+writes from there deadlocks (response handler == caller). So the
+notification callback only enqueues; a dedicated worker thread does the
+actual plc.write off the AmsRouter.
 """
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 from dataclasses import dataclass
 
 from recipes_store import Recipe, RecipesStore
@@ -52,8 +56,14 @@ def _recipe_to_struct(r: Recipe) -> dict:
     }
 
 
+_STOP = object()
+
+
 class RecipePublisher:
-    """PLC subscribe(code) → recipes.get(code) → plc.write(setpoints)."""
+    """PLC subscribe(code) → recipes.get(code) → plc.write(setpoints).
+
+    Writes run on a worker thread, never on pyads's notification thread.
+    """
 
     def __init__(
         self,
@@ -65,20 +75,30 @@ class RecipePublisher:
         self.plc = plc
         self.cfg = cfg
         self._handles: tuple[int, int] | None = None
+        self._queue: queue.Queue = queue.Queue()
+        self._worker: threading.Thread | None = None
+        self._stop_evt = threading.Event()
 
     def start(self) -> None:
         self.plc.validate([self.cfg.code_alias, self.cfg.setpoints_alias])
+
+        self._stop_evt.clear()
+        self._worker = threading.Thread(
+            target=self._run, daemon=True, name="recipe-pub-writer",
+        )
+        self._worker.start()
+
         # Push current recipe once so the PLC isn't stale at boot.
         try:
             current = self.plc.read(self.cfg.code_alias)
-            self._apply(int(current))
+            self._queue.put(int(current))
         except Exception as e:
             log.warning("initial recipe read failed: %s", e)
 
         try:
             self._handles = self.plc.subscribe(
                 self.cfg.code_alias,
-                lambda _alias, val: self._apply(int(val)),
+                lambda _alias, val: self._queue.put(int(val)),
                 cycle_time_ms=self.cfg.cycle_ms,
                 on_change=True,
             )
@@ -96,9 +116,31 @@ class RecipePublisher:
             except Exception as e: log.warning("unsubscribe code failed: %s", e)
             self._handles = None
 
-    # ---- internals ----------------------------------------------------------
+        self._stop_evt.set()
+        self._queue.put(_STOP)
+        if self._worker is not None:
+            self._worker.join(timeout=2.0)
+            self._worker = None
+
+    # ---- worker -------------------------------------------------------------
+
+    def _run(self) -> None:
+        while not self._stop_evt.is_set():
+            try:
+                item = self._queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if item is _STOP:
+                break
+            try:
+                self._apply(int(item))
+            except Exception:
+                log.exception("recipe writer crashed on code=%s", item)
 
     def _apply(self, code: int) -> None:
+        if code <= 0:
+            # 0 means "no selection" — don't warn, don't query the DB.
+            return
         recipe = self.recipes.get(code)
         if recipe is None:
             log.warning("recipe code %s not found in DB — no setpoints written", code)
