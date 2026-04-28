@@ -1,7 +1,7 @@
 """config.py — load app settings from app_config.toml.
 
 Two TOMLs split the concerns:
-    app_config.toml    — UI, scanner, cameras, boxes, PLC connection
+    app_config.toml    — UI, scanner, cameras, PLC connection
     plc_signals.toml   — TwinCAT structs + var aliases (loaded by TwinCATComm)
 
 Add a new field: 1) add it to the matching dataclass, 2) read it in load().
@@ -12,7 +12,6 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from box_scene        import BoxConfig
 from camera_panel     import CameraConfig
 from camera_publisher import CameraTriggerConfig
 from errors_store     import ErrorsConfig
@@ -62,7 +61,6 @@ class AppConfig:
     scanner:    ScannerSettings
     ui:         UISettings
     cameras:    list[CameraConfig]
-    boxes:      list[BoxConfig]
     robot:      RobotConfig | None
     recipes:    RecipesConfig | None
     sizes:      SizesConfig | None
@@ -108,7 +106,6 @@ class AppConfig:
             ui=UISettings(**d["ui"]),
             cameras=[CameraConfig(name=c["name"], rtsp_url=c["url"])
                      for c in d["cameras"]],
-            boxes=[BoxConfig(**b) for b in d["boxes"]],
             robot=(RobotConfig(**d["robot"]) if "robot" in d else None),
             recipes=(
                 RecipesConfig(**d["recipes"]) if "recipes" in d else None

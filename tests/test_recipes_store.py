@@ -114,6 +114,83 @@ def test_deactivate_keeps_row(tmp_path: Path):
         s.stop()
 
 
+def test_delete_removes_row(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        s.save(_box(code=5))
+        assert s.get(5) is not None
+        s.delete(5)
+        assert s.get(5) is None
+    finally:
+        s.stop()
+
+
+def test_delete_missing_is_silent(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        s.delete(999)                                # must not raise
+    finally:
+        s.stop()
+
+
+def test_rename_moves_row_preserves_created_at(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        s.save(_box(code=7, x_topsheet_length=100))
+        with sqlite3.connect(s.cfg.db_path) as c:
+            created = c.execute(
+                "SELECT created_at FROM recipe WHERE code = 7"
+            ).fetchone()[0]
+
+        s.rename(7, 9)
+
+        assert s.get(7) is None
+        moved = s.get(9)
+        assert moved is not None
+        assert moved.x_topsheet_length == 100
+        with sqlite3.connect(s.cfg.db_path) as c:
+            assert c.execute(
+                "SELECT created_at FROM recipe WHERE code = 9"
+            ).fetchone()[0] == created
+            assert c.execute(
+                "SELECT updated_at FROM recipe WHERE code = 9"
+            ).fetchone()[0] is not None
+    finally:
+        s.stop()
+
+
+def test_rename_to_existing_code_raises(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        s.save(_box(code=1)); s.save(_box(code=2))
+        with pytest.raises(ValueError, match="already exists"):
+            s.rename(1, 2)
+        # Originals are untouched.
+        assert s.get(1) is not None
+        assert s.get(2) is not None
+    finally:
+        s.stop()
+
+
+def test_rename_missing_old_code_raises(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        with pytest.raises(KeyError, match="not found"):
+            s.rename(99, 100)
+    finally:
+        s.stop()
+
+
+def test_rename_same_code_is_noop(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        s.save(_box(code=3))
+        s.rename(3, 3)                              # must not raise
+        assert s.get(3) is not None
+    finally:
+        s.stop()
+
+
 def test_save_bumps_updated_at(tmp_path: Path):
     s = _store(tmp_path); s.start()
     try:
