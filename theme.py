@@ -133,16 +133,19 @@ def apply_theme() -> None:
 def warak_header(subtitle: str = "") -> None:
     """Render the WARAK logo + optional subtitle as a top bar.
 
-    Uses the corporate horizontal RGB SVG from /static. If the SVG is
-    missing for any reason, the alt text falls back to the wordmark.
+    Uses a raw <img> instead of ui.image so the SVG renders at its
+    natural aspect ratio without Quasar's q-img wrapper interfering
+    with the Tailwind height class.
     """
     with ui.row().classes(
         "w-full items-center gap-4 px-6 py-3 bg-white border-b "
         "border-[#E5E9EE]"
     ):
-        ui.image("/static/logo-horizontal-RGB.svg").classes(
-            "h-10 w-auto"
-        ).style("flex: 0 0 auto")
+        ui.html(
+            '<img src="/static/logo-horizontal-RGB.svg" '
+            'alt="WARAK" '
+            'style="height:40px;width:auto;display:block;flex:0 0 auto;" />'
+        )
         if subtitle:
             ui.element("div").classes(
                 "border-l border-[#E5E9EE] h-8 mx-1"
