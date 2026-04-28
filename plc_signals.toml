@@ -3,6 +3,9 @@ net_id = "169.254.115.139.1.1"
 port = 851
 # Set true to log every ADS read/write/notification (chatty; debugging only).
 log_signals = false
+# Per-call ADS response timeout. Bump if you see "timeout elapsed (1861)"
+# on writes — often indicates a slow PLC scan or first-time symbol resolve.
+timeout_ms = 5000
 
 # Define UDTs once, reference them from vars
 [structs.ST_SickEvent]
