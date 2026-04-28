@@ -98,7 +98,7 @@ setpoints = { name = "RecipeSetpoints", type = "ST_RecipeSetpoints" }
 prefix = "pyADS"
 
 [groups.size.vars]
-cardboard_id        = { name = "nCardboardId",       type = "DINT" }
+cardboard_id        = { name = "nCardboardId",       type = "INT" }
 cardboard_setpoints = { name = "CardboardSetpoints", type = "ST_SizeSetpoints" }
-others_id           = { name = "nOtherId",           type = "DINT" }
+others_id           = { name = "nOtherId",           type = "INT" }
 others_setpoints    = { name = "OtherSetpoints",     type = "ST_SizeSetpoints" }
