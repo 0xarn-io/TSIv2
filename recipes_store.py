@@ -8,7 +8,7 @@ the code changes.
 Usage:
     recipes = RecipesStore.from_config(cfg.recipes)
     recipes.start()
-    recipes.save(Recipe(code=1, name="Tall Box", width_mm=711, ...))
+    recipes.save(Recipe(code=1, x_topsheet_length=711, y_topsheet_width=400, ...))
     r = recipes.get(1)
     recipes.stop()
 
@@ -27,25 +27,27 @@ log = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS recipe (
-    code          INTEGER PRIMARY KEY,
-    name          TEXT NOT NULL,
-    description   TEXT NOT NULL DEFAULT '',
-    width_mm      INTEGER NOT NULL,
-    height_mm     INTEGER NOT NULL,
-    depth_mm      INTEGER NOT NULL,
-    width_tol     INTEGER NOT NULL DEFAULT 5,
-    height_tol    INTEGER NOT NULL DEFAULT 5,
-    depth_tol     INTEGER NOT NULL DEFAULT 5,
-    x1_pos        INTEGER NOT NULL DEFAULT 0,
-    x2_pos        INTEGER NOT NULL DEFAULT 0,
-    x3_pos        INTEGER NOT NULL DEFAULT 0,
-    y1_pos        INTEGER NOT NULL DEFAULT 0,
-    y2_pos        INTEGER NOT NULL DEFAULT 0,
-    y3_pos        INTEGER NOT NULL DEFAULT 0,
-    rapid_program TEXT NOT NULL DEFAULT '',
-    active        INTEGER NOT NULL DEFAULT 1,
-    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at    TEXT
+    code              INTEGER PRIMARY KEY,
+    x_topsheet_length INTEGER NOT NULL DEFAULT 0,
+    x_topsheet_width  INTEGER NOT NULL DEFAULT 0,
+    x_units           INTEGER NOT NULL DEFAULT 0,
+    x1_pos            INTEGER NOT NULL DEFAULT 0,
+    x2_pos            INTEGER NOT NULL DEFAULT 0,
+    x3_pos            INTEGER NOT NULL DEFAULT 0,
+    x_folding         INTEGER NOT NULL DEFAULT 0,
+    y_topsheet_length INTEGER NOT NULL DEFAULT 0,
+    y_topsheet_width  INTEGER NOT NULL DEFAULT 0,
+    y_units           INTEGER NOT NULL DEFAULT 0,
+    y1_pos            INTEGER NOT NULL DEFAULT 0,
+    y2_pos            INTEGER NOT NULL DEFAULT 0,
+    y3_pos            INTEGER NOT NULL DEFAULT 0,
+    y_folding         INTEGER NOT NULL DEFAULT 0,
+    wood              INTEGER NOT NULL DEFAULT 0,
+    wood_x_pos        INTEGER NOT NULL DEFAULT 0,
+    wood_y_pos        INTEGER NOT NULL DEFAULT 0,
+    active            INTEGER NOT NULL DEFAULT 1,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at        TEXT
 );
 """
 
@@ -57,32 +59,38 @@ class RecipesConfig:
 
 @dataclass
 class Recipe:
-    code:          int
-    name:          str
-    width_mm:      int
-    height_mm:     int
-    depth_mm:      int
-    description:   str = ""
-    width_tol:     int = 5
-    height_tol:    int = 5
-    depth_tol:     int = 5
-    x1_pos:        int = 0
-    x2_pos:        int = 0
-    x3_pos:        int = 0
-    y1_pos:        int = 0
-    y2_pos:        int = 0
-    y3_pos:        int = 0
-    rapid_program: str = ""
-    active:        bool = True
+    code:              int
+    x_topsheet_length: int  = 0
+    x_topsheet_width:  int  = 0
+    x_units:           int  = 0
+    x1_pos:            int  = 0
+    x2_pos:            int  = 0
+    x3_pos:            int  = 0
+    x_folding:         bool = False
+    y_topsheet_length: int  = 0
+    y_topsheet_width:  int  = 0
+    y_units:           int  = 0
+    y1_pos:            int  = 0
+    y2_pos:            int  = 0
+    y3_pos:            int  = 0
+    y_folding:         bool = False
+    wood:              bool = False
+    wood_x_pos:        int  = 0
+    wood_y_pos:        int  = 0
+    active:            bool = True
 
 
 # Columns we round-trip via the dataclass (excludes auto-managed timestamps).
 _RECIPE_COLS = [f.name for f in fields(Recipe)]
 
 
+_BOOL_COLS = ("x_folding", "y_folding", "wood", "active")
+
+
 def _row_to_recipe(row: sqlite3.Row) -> Recipe:
     d = {k: row[k] for k in _RECIPE_COLS}
-    d["active"] = bool(d["active"])
+    for c in _BOOL_COLS:
+        d[c] = bool(d[c])
     return Recipe(**d)
 
 
@@ -135,7 +143,8 @@ class RecipesStore:
     def save(self, r: Recipe) -> None:
         """Upsert by code. Bumps updated_at."""
         d = asdict(r)
-        d["active"] = 1 if d["active"] else 0
+        for c in _BOOL_COLS:
+            d[c] = 1 if d[c] else 0
         cols = list(d.keys())
         placeholders = ", ".join(f":{c}" for c in cols)
         col_list = ", ".join(cols)

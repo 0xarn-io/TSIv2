@@ -16,8 +16,7 @@ def _store(tmp_path: Path) -> RecipesStore:
 
 
 def _box(code: int = 1, **overrides) -> Recipe:
-    base = dict(code=code, name=f"Box-{code}",
-                width_mm=711, height_mm=1800, depth_mm=1778)
+    base = dict(code=code)
     base.update(overrides)
     return Recipe(**base)
 
@@ -39,19 +38,27 @@ def test_save_and_get_round_trip(tmp_path: Path):
     s = _store(tmp_path)
     s.start()
     try:
-        r = _box(code=7, name="Tall", width_mm=711, height_mm=1800,
-                 x1_pos=100, y1_pos=200, rapid_program="MainProc",
-                 description="seven")
+        r = _box(code=7,
+                 x_topsheet_length=711, x_topsheet_width=400, x_units=2,
+                 x1_pos=100, x2_pos=110, x3_pos=120, x_folding=True,
+                 y_topsheet_length=1800, y_topsheet_width=900, y_units=3,
+                 y1_pos=200, y2_pos=210, y3_pos=220, y_folding=False,
+                 wood=True, wood_x_pos=50, wood_y_pos=60)
         s.save(r)
         got = s.get(7)
         assert got is not None
         assert got.code == 7
-        assert got.name == "Tall"
-        assert got.width_mm == 711
+        assert got.x_topsheet_length == 711
+        assert got.x_topsheet_width == 400
+        assert got.x_units == 2
         assert got.x1_pos == 100
+        assert got.x_folding is True
+        assert got.y_topsheet_length == 1800
         assert got.y1_pos == 200
-        assert got.rapid_program == "MainProc"
-        assert got.description == "seven"
+        assert got.y_folding is False
+        assert got.wood is True
+        assert got.wood_x_pos == 50
+        assert got.wood_y_pos == 60
         assert got.active is True
     finally:
         s.stop()
@@ -68,11 +75,10 @@ def test_get_missing_returns_none(tmp_path: Path):
 def test_save_upserts_by_code(tmp_path: Path):
     s = _store(tmp_path); s.start()
     try:
-        s.save(_box(code=3, name="A", width_mm=100, height_mm=200, depth_mm=300))
-        s.save(_box(code=3, name="B", width_mm=999, height_mm=200, depth_mm=300))
+        s.save(_box(code=3, x_topsheet_length=100, y_topsheet_length=200))
+        s.save(_box(code=3, x_topsheet_length=999, y_topsheet_length=200))
         got = s.get(3)
-        assert got.name == "B"
-        assert got.width_mm == 999
+        assert got.x_topsheet_length == 999
         # Only one row with code=3.
         with sqlite3.connect(s.cfg.db_path) as c:
             assert c.execute(
@@ -111,14 +117,14 @@ def test_deactivate_keeps_row(tmp_path: Path):
 def test_save_bumps_updated_at(tmp_path: Path):
     s = _store(tmp_path); s.start()
     try:
-        s.save(_box(code=1, name="first"))
+        s.save(_box(code=1, x_topsheet_length=100))
         with sqlite3.connect(s.cfg.db_path) as c:
             first_updated = c.execute(
                 "SELECT updated_at FROM recipe WHERE code = 1"
             ).fetchone()[0]
         # First insert leaves updated_at NULL; the upsert path sets it.
         assert first_updated is None
-        s.save(_box(code=1, name="second"))
+        s.save(_box(code=1, x_topsheet_length=200))
         with sqlite3.connect(s.cfg.db_path) as c:
             second_updated = c.execute(
                 "SELECT updated_at FROM recipe WHERE code = 1"
@@ -128,14 +134,35 @@ def test_save_bumps_updated_at(tmp_path: Path):
         s.stop()
 
 
-def test_default_tolerances(tmp_path: Path):
+def test_default_field_values(tmp_path: Path):
     s = _store(tmp_path); s.start()
     try:
-        s.save(_box(code=1))                        # no tolerances supplied
+        s.save(_box(code=1))                        # only code supplied
         got = s.get(1)
-        assert got.width_tol == 5
-        assert got.height_tol == 5
-        assert got.depth_tol == 5
+        assert got.x_topsheet_length == 0
+        assert got.y_topsheet_length == 0
+        assert got.x_folding is False
+        assert got.y_folding is False
+        assert got.wood is False
+        assert got.wood_x_pos == 0
+        assert got.wood_y_pos == 0
+    finally:
+        s.stop()
+
+
+def test_bools_persist_round_trip(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        s.save(_box(code=1, x_folding=True, y_folding=True, wood=True))
+        got = s.get(1)
+        assert got.x_folding is True
+        assert got.y_folding is True
+        assert got.wood is True
+        s.save(_box(code=1, x_folding=False, y_folding=False, wood=False))
+        got = s.get(1)
+        assert got.x_folding is False
+        assert got.y_folding is False
+        assert got.wood is False
     finally:
         s.stop()
 

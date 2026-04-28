@@ -12,8 +12,7 @@ from recipes_store import Recipe
 
 
 def _recipe(code: int = 1, **overrides) -> Recipe:
-    base = dict(code=code, name=f"R{code}",
-                width_mm=711, height_mm=1800, depth_mm=1778)
+    base = dict(code=code)
     base.update(overrides)
     return Recipe(**base)
 
@@ -33,14 +32,20 @@ def _make(initial_code: int = 0):
 # ---- translation -------------------------------------------------------------
 
 def test_recipe_to_struct_maps_all_fields():
-    r = _recipe(width_mm=100, height_mm=200, depth_mm=300,
-                x1_pos=11, x2_pos=22, x3_pos=33,
-                y1_pos=44, y2_pos=55, y3_pos=66)
+    r = _recipe(
+        x_topsheet_length=100, x_topsheet_width=110, x_units=2,
+        x1_pos=11, x2_pos=22, x3_pos=33, x_folding=True,
+        y_topsheet_length=200, y_topsheet_width=210, y_units=3,
+        y1_pos=44, y2_pos=55, y3_pos=66, y_folding=False,
+        wood=True, wood_x_pos=77, wood_y_pos=88,
+    )
     s = _recipe_to_struct(r)
     assert s == {
-        "nWidth":  100, "nHeight": 200, "nDepth":  300,
-        "nX1Pos":  11,  "nX2Pos":  22,  "nX3Pos":  33,
-        "nY1Pos":  44,  "nY2Pos":  55,  "nY3Pos":  66,
+        "nXTopsheetLength": 100, "nXTopsheetWidth": 110, "nXUnits": 2,
+        "nX1Pos": 11, "nX2Pos": 22, "nX3Pos": 33, "bXFolding": True,
+        "nYTopsheetLength": 200, "nYTopsheetWidth": 210, "nYUnits": 3,
+        "nY1Pos": 44, "nY2Pos": 55, "nY3Pos": 66, "bYFolding": False,
+        "bWood": True, "nWoodXPos": 77, "nWoodYPos": 88,
     }
 
 
@@ -55,7 +60,7 @@ def test_start_validates_aliases():
 def test_start_pushes_initial_recipe():
     """If a recipe is already selected on the PLC, push it once at boot."""
     pub, recipes, plc = _make(initial_code=7)
-    recipes.get.return_value = _recipe(code=7, width_mm=999)
+    recipes.get.return_value = _recipe(code=7, x_topsheet_length=999)
 
     pub.start()
 
@@ -63,7 +68,7 @@ def test_start_pushes_initial_recipe():
     plc.write.assert_called_once()
     alias, struct = plc.write.call_args.args
     assert alias == "recipe.setpoints"
-    assert struct["nWidth"] == 999
+    assert struct["nXTopsheetLength"] == 999
 
 
 def test_start_handles_unknown_initial_code(caplog):
@@ -99,7 +104,9 @@ def test_subscribe_callback_writes_setpoints():
 
     pub.start()
     plc.reset_mock()
-    recipes.get.return_value = _recipe(code=5, width_mm=500, height_mm=1500, depth_mm=900)
+    recipes.get.return_value = _recipe(
+        code=5, x_topsheet_length=500, y_topsheet_length=1500, wood=True,
+    )
 
     captured["cb"]("recipe.code", 5)
 
@@ -107,9 +114,9 @@ def test_subscribe_callback_writes_setpoints():
     plc.write.assert_called_once()
     alias, struct = plc.write.call_args.args
     assert alias == "recipe.setpoints"
-    assert struct["nWidth"]  == 500
-    assert struct["nHeight"] == 1500
-    assert struct["nDepth"]  == 900
+    assert struct["nXTopsheetLength"] == 500
+    assert struct["nYTopsheetLength"] == 1500
+    assert struct["bWood"] is True
 
 
 def test_callback_unknown_code_is_warned_not_written(caplog):

@@ -26,21 +26,29 @@ class RecipePublisherConfig:
 
 
 def _recipe_to_struct(r: Recipe) -> dict:
-    """Recipe → ST_RecipeSetpoints dict (9 × DINT).
+    """Recipe → ST_RecipeSetpoints dict.
 
     Adding a setpoint: append a field here AND in [structs.ST_RecipeSetpoints]
     in plc_signals.toml. No other code changes.
     """
     return {
-        "nWidth":  int(r.width_mm),
-        "nHeight": int(r.height_mm),
-        "nDepth":  int(r.depth_mm),
-        "nX1Pos":  int(r.x1_pos),
-        "nX2Pos":  int(r.x2_pos),
-        "nX3Pos":  int(r.x3_pos),
-        "nY1Pos":  int(r.y1_pos),
-        "nY2Pos":  int(r.y2_pos),
-        "nY3Pos":  int(r.y3_pos),
+        "nXTopsheetLength": int(r.x_topsheet_length),
+        "nXTopsheetWidth":  int(r.x_topsheet_width),
+        "nXUnits":          int(r.x_units),
+        "nX1Pos":            int(r.x1_pos),
+        "nX2Pos":            int(r.x2_pos),
+        "nX3Pos":            int(r.x3_pos),
+        "bXFolding":         bool(r.x_folding),
+        "nYTopsheetLength": int(r.y_topsheet_length),
+        "nYTopsheetWidth":  int(r.y_topsheet_width),
+        "nYUnits":          int(r.y_units),
+        "nY1Pos":            int(r.y1_pos),
+        "nY2Pos":            int(r.y2_pos),
+        "nY3Pos":            int(r.y3_pos),
+        "bYFolding":         bool(r.y_folding),
+        "bWood":             bool(r.wood),
+        "nWoodXPos":        int(r.wood_x_pos),
+        "nWoodYPos":        int(r.wood_y_pos),
     }
 
 
@@ -89,6 +97,6 @@ class RecipePublisher:
             return
         try:
             self.plc.write(self.cfg.setpoints_alias, _recipe_to_struct(recipe))
-            log.info("recipe %s pushed (%s)", code, recipe.name)
+            log.info("recipe %s pushed", code)
         except Exception as e:
             log.warning("recipe setpoints write failed: %s", e)
