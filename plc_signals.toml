@@ -34,6 +34,12 @@ bGuardStop   = "BOOL"
 bEStop       = "BOOL"
 nSpeedRatio  = "DINT"
 
+[structs.ST_SizeSetpoints]
+nWidthMm  = "DINT"
+nLengthMm = "DINT"
+fWidthIn  = "REAL"
+fLengthIn = "REAL"
+
 [structs.ST_RecipeSetpoints]
 nXTopsheetLength = "DINT"
 nXTopsheetWidth  = "DINT"
@@ -86,3 +92,12 @@ prefix = "pyADS"
 [groups.recipe.vars]
 code      = { name = "nRecipeCode",     type = "DINT" }
 setpoints = { name = "RecipeSetpoints", type = "ST_RecipeSetpoints" }
+
+[groups.size]
+prefix = "pyADS"
+
+[groups.size.vars]
+cardboard_id        = { name = "nCardboardId",       type = "DINT" }
+cardboard_setpoints = { name = "CardboardSetpoints", type = "ST_SizeSetpoints" }
+others_id           = { name = "nOtherId",           type = "DINT" }
+others_setpoints    = { name = "OtherSetpoints",     type = "ST_SizeSetpoints" }

@@ -18,6 +18,7 @@ from typing import Callable
 from errors_store     import ErrorsStore
 from recipe_publisher import RecipePublisher
 from recipes_store    import RecipesStore
+from sizes_publisher  import SizesPublisher
 from sizes_store      import SizesStore
 from unit_logger      import UnitLogger
 
@@ -63,6 +64,9 @@ class DBOrchestrator:
                            if getattr(c, "recipes", None) else None)
         self.sizes      = (SizesStore.from_config(c.sizes)
                            if getattr(c, "sizes", None) else None)
+        self.sizes_pub  = (SizesPublisher(self.sizes, self._plc, c.plc.size_setpoints)
+                           if self.sizes and getattr(c.plc, "size_setpoints", None)
+                           else None)
         self.recipe_pub = (RecipePublisher(self.recipes, self._plc, c.plc.recipe)
                            if self.recipes and getattr(c.plc, "recipe", None)
                            else None)
@@ -82,6 +86,7 @@ class DBOrchestrator:
         self._register(self.recipes)
         self._register(self.sizes)
         self._register(self.recipe_pub)
+        self._register(self.sizes_pub)
         self._register(self.unit_log)
 
     def _register(self, obj) -> None:
