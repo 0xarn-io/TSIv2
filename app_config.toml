@@ -1,11 +1,35 @@
-# Application configuration for main.py
-# (PLC variable mappings live separately in plc_vars.toml)
+# Application configuration for Main.py.
+# PLC variable mappings live separately in plc_signals.toml.
 
 [plc]
-ams_net_id    = "169.254.115.139.1.1"
-enable_symbol = "pyADS.bEnable"
+# AMS net_id and port are defined in plc_signals.toml ([ams] section).
+vars_file = "plc_signals.toml"
+
+[plc.publisher]
+event_alias     = "sick.event"
+live_alias      = "sick.live"
+enable_alias    = "sick.enable"
+enable_cycle_ms = 100
+
+# Optional: increments a counter so the PLC can detect Python liveness.
+# Comment out the [plc.heartbeat] table to disable entirely.
+[plc.heartbeat]
+alias     = "health.heartbeat"
+period_ms = 1000
+
+# Map PLC bool aliases (in plc_signals.toml) to camera names (below).
+# Rising edge on the PLC bool fires a snapshot from that camera.
+[[plc.camera_triggers]]
+alias  = "camera.snap_entry"
+camera = "entry"
+
+[[plc.camera_triggers]]
+alias  = "camera.snap_exit"
+camera = "exit"
 
 [scanner]
+udp_port_a     = 2111
+udp_port_b     = 2112
 separation_m   = 2.45
 belt_speed_mps = 0.254
 belt_y         = -1.48
@@ -23,3 +47,21 @@ url  = "rtsp://192.168.125.50:554/profile1"
 [[cameras]]
 name = "exit"
 url  = "rtsp://192.168.125.51:554/profile1"
+
+[[boxes]]
+width_mm  = 711
+height_mm = 1800
+depth_mm  = 1778
+x_pos     = -2.0
+
+[[boxes]]
+width_mm  = 899
+height_mm = 1300
+depth_mm  = 1778
+x_pos     = 0.0
+
+[[boxes]]
+width_mm  = 635
+height_mm = 1000
+depth_mm  = 1778
+x_pos     = 2.0

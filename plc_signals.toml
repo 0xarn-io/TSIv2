@@ -1,0 +1,47 @@
+[ams]
+net_id = "169.254.115.139.1.1"
+port = 851
+# Set true to log every ADS read/write/notification (chatty; debugging only).
+log_signals = false
+
+# Define UDTs once, reference them from vars
+[structs.ST_SickEvent]
+bNew         = "BOOL"
+nLength      = "DINT"
+nWidthMean   = "DINT"
+nWidthMin    = "DINT"
+nWidthMax    = "DINT"
+nHeightMean  = "DINT"
+nHeightMin   = "DINT"
+nHeightMax   = "DINT"
+nOffsetMean  = "DINT"
+nOffsetMin   = "DINT"
+nOffsetMax   = "DINT"
+fDuration    = "REAL"
+nSamples     = "DINT"
+
+[structs.ST_SickLive]
+nWidth  = "DINT"
+nHeight = "DINT"
+nOffset = "DINT"
+
+[groups.sick]
+prefix = "pyADS"   # GVL with {attribute 'qualified_only'} → use bare name
+
+[groups.sick.vars]
+event   = { name = "SickEvent", type = "ST_SickEvent" }
+live    = { name = "SickLive",  type = "ST_SickLive" }
+enable  = { name = "bEnable",   type = "BOOL" }
+
+[groups.camera]
+prefix = "pyADS"
+
+[groups.camera.vars]
+snap_entry = { name = "bSnapEntry", type = "BOOL" }
+snap_exit  = { name = "bSnapExit",  type = "BOOL" }
+
+[groups.health]
+prefix = "pyADS"
+
+[groups.health.vars]
+heartbeat = { name = "nHeartbeat", type = "UDINT" }

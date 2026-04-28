@@ -1,8 +1,16 @@
-# twincat_comm.py
-"""TOML-driven pyads wrapper for TwinCAT variable lists, with UDT support."""
+"""twincat_comm.py — TOML-driven pyads wrapper for TwinCAT vars, with UDT support.
+
+Public API:
+    comm = TwinCATComm.from_toml("plc_signals.toml")
+    comm.validate(["sick.event", "sick.live"])   # fail-fast at startup
+    with comm:
+        comm.write("sick.live", {"nWidth": 711, "nHeight": 1800, "nOffset": 0})
+        comm.subscribe("sick.enable", lambda alias, val: print(alias, val))
+"""
 from __future__ import annotations
 
 import ctypes
+import logging
 import tomllib
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -10,6 +18,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 import pyads
+
+log = logging.getLogger(__name__)
+
+
+def _short(v: Any) -> str:
+    """Compact one-line repr — keeps struct dicts readable in log lines."""
+    if isinstance(v, dict):
+        return "{" + " ".join(f"{k}={val}" for k, val in v.items()) + "}"
+    return repr(v)
 
 
 # IEC primitive type → (pyads PLCTYPE_*, ctypes type for struct packing)
@@ -57,6 +74,7 @@ class VarDef:
 class TwinCATConfig:
     net_id: str
     port: int
+    log_signals: bool = False
     structs: dict[str, StructDef] = field(default_factory=dict)
     variables: dict[str, VarDef] = field(default_factory=dict)
 
@@ -72,9 +90,13 @@ class TwinCATConfig:
         except KeyError as e:
             raise ValueError(f"[ams] missing required key: {e}") from e
 
+        log_signals = bool(data["ams"].get("log_signals", False))
         structs = cls._build_structs(data.get("structs", {}))
         variables = cls._build_vars(data.get("groups", {}), structs)
-        return cls(net_id=net_id, port=port, structs=structs, variables=variables)
+        return cls(
+            net_id=net_id, port=port, log_signals=log_signals,
+            structs=structs, variables=variables,
+        )
 
     @staticmethod
     def _build_structs(specs: dict[str, dict[str, str]]) -> dict[str, StructDef]:
@@ -95,12 +117,13 @@ class TwinCATConfig:
                 ordered[fname] = ftype_u
                 ctypes_fields.append((fname, PRIMITIVE_TYPES[ftype_u][1]))
 
-            # TwinCAT default: 1-byte packed. If you use {attribute 'pack_mode'},
-            # adjust _pack_ to match (1, 2, 4, or 8).
+            # TwinCAT 3 default pack_mode is 8. If a struct in the PLC has
+            # {attribute 'pack_mode' := '1'} (or 2/4), set _pack_ accordingly
+            # — easiest is to add a TOML option later if you actually use it.
             cls_ = type(
                 sname,
                 (ctypes.Structure,),
-                {"_pack_": 1, "_fields_": ctypes_fields},
+                {"_pack_": 8, "_fields_": ctypes_fields},
             )
             out[sname] = StructDef(name=sname, fields=ordered, ctypes_class=cls_)
         return out
@@ -155,12 +178,14 @@ class TwinCATComm:
         # alias -> (notif_handle, user_handle)
         self._notifications: dict[str, tuple[int, int]] = {}
 
-    def __enter__(self) -> "TwinCATComm":
-        self._conn.open()
-        return self
+    @classmethod
+    def from_toml(cls, path: str | Path) -> "TwinCATComm":
+        return cls(TwinCATConfig.from_toml(path))
 
-    def __exit__(self, exc_type, exc, tb) -> None:
-        self.close()
+    # ---- lifecycle ------------------------------------------------------
+
+    def open(self) -> None:
+        self._conn.open()
 
     def close(self) -> None:
         for handles in list(self._notifications.values()):
@@ -171,9 +196,26 @@ class TwinCATComm:
         self._notifications.clear()
         self._conn.close()
 
-    @classmethod
-    def from_toml(cls, path: str | Path) -> "TwinCATComm":
-        return cls(TwinCATConfig.from_toml(path))
+    def __enter__(self) -> "TwinCATComm":
+        self.open()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    # ---- validation -----------------------------------------------------
+
+    def validate(self, required_aliases: list[str]) -> None:
+        """Raise if any alias is missing from the loaded TOML. Call at startup."""
+        missing = [a for a in required_aliases if a not in self.config.variables]
+        if missing:
+            known = sorted(self.config.variables)
+            raise KeyError(
+                f"plc_signals.toml is missing required alias(es): {missing}. "
+                f"Known aliases: {known}"
+            )
+
+    # ---- read / write ---------------------------------------------------
 
     def _resolve(self, alias: str) -> VarDef:
         try:
@@ -186,7 +228,10 @@ class TwinCATComm:
     def read(self, alias: str) -> Any:
         v = self._resolve(alias)
         raw = self._conn.read_by_name(v.symbol, v.plc_type)
-        return self._unpack(v, raw)
+        val = self._unpack(v, raw)
+        if self.config.log_signals:
+            log.info("ads R %s = %s", alias, _short(val))
+        return val
 
     def write(self, alias: str, value: Any) -> None:
         v = self._resolve(alias)
@@ -195,6 +240,8 @@ class TwinCATComm:
             self._conn.write_by_name(v.symbol, packed, v.plc_type)
         else:
             self._conn.write_by_name(v.symbol, value, v.plc_type)
+        if self.config.log_signals:
+            log.info("ads W %s = %s", alias, _short(value))
 
     def _unpack(self, v: VarDef, raw: Any) -> Any:
         if not v.is_struct:
@@ -219,6 +266,8 @@ class TwinCATComm:
                 f"Valid: {sorted(known)}"
             )
 
+        # Partial dict → read-modify-write so untouched fields aren't zeroed.
+        # Costs one extra ADS round-trip per partial write.
         if set(value.keys()) != known:
             current = self._conn.read_by_name(v.symbol, cls_)
         else:
@@ -227,6 +276,8 @@ class TwinCATComm:
         for fname, fval in value.items():
             setattr(current, fname, fval)
         return current
+
+    # ---- notifications --------------------------------------------------
 
     def subscribe(
         self,
@@ -241,7 +292,6 @@ class TwinCATComm:
         length = (ctypes.sizeof(v.plc_type) if v.is_struct
                   else ctypes.sizeof(PRIMITIVE_TYPES[v.type_name.upper()][1]))
 
-        # NotificationAttrib takes seconds; we accept ms and convert.
         attr = pyads.NotificationAttrib(
             length=length,
             trans_mode=(pyads.ADSTRANS_SERVERONCHA if on_change
@@ -250,12 +300,14 @@ class TwinCATComm:
             cycle_time=cycle_time_ms / 1000,
         )
 
-        # Fresh closure per subscribe call — alias and callback are captured
-        # safely. If you ever refactor this into a loop creating multiple
-        # callbacks, bind them as default args: def _cb(..., a=alias, c=callback)
+        log_signals = self.config.log_signals
+
         @self._conn.notification(v.plc_type)
         def _cb(handle, name, timestamp, value):
-            callback(alias, self._unpack(v, value))
+            unpacked = self._unpack(v, value)
+            if log_signals:
+                log.info("ads N %s = %s", alias, _short(unpacked))
+            callback(alias, unpacked)
 
         handles = self._conn.add_device_notification(v.symbol, attr, _cb)
         self._notifications[alias] = handles
@@ -263,7 +315,6 @@ class TwinCATComm:
 
     def unsubscribe(self, handles: tuple[int, int]) -> None:
         self._conn.del_device_notification(*handles)
-        # remove by value match
         for k, v in list(self._notifications.items()):
             if v == handles:
                 del self._notifications[k]

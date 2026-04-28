@@ -6,7 +6,9 @@ knowledge of how/where measurements are consumed — register callbacks.
 
 from __future__ import annotations
 
+import logging
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -15,6 +17,9 @@ from pysickudt import (
     axis_position, height_range,
 )
 from pysickudt.stream import UDPReceiver
+
+log = logging.getLogger(__name__)
+HEARTBEAT_S = 10.0
 
 
 MeasurementCallback = Callable[[dict[str, Any]], None]
@@ -28,6 +33,17 @@ class SickBridge:
     fire from the receiver thread — keep them quick, or hand off to a
     queue.
     """
+
+    @classmethod
+    def from_config(cls, scanner_cfg) -> "SickBridge":
+        """Construct from a ScannerSettings dataclass."""
+        return cls(
+            udp_port_a=scanner_cfg.udp_port_a,
+            udp_port_b=scanner_cfg.udp_port_b,
+            scanner_separation_m=scanner_cfg.separation_m,
+            belt_speed_m_per_s=scanner_cfg.belt_speed_mps,
+            belt_y=scanner_cfg.belt_y,
+        )
 
     def __init__(
         self,
@@ -64,6 +80,15 @@ class SickBridge:
         self._enabled = True
         self._lock = threading.Lock()
 
+        # Diagnostics: timestamps of last received scan per side, plus a
+        # one-shot "first scan" log per side and a periodic heartbeat.
+        self._last_a = 0.0
+        self._last_b = 0.0
+        self._seen_a = False
+        self._seen_b = False
+        self._hb_stop: threading.Event | None = None
+        self._hb_thread: threading.Thread | None = None
+
     # ---- subscriber API ----------------------------------------------
 
     def on_measurement(self, cb: MeasurementCallback) -> Callable[[], None]:
@@ -80,8 +105,18 @@ class SickBridge:
         self._rx_a.on_scan(self._on_a)
         self._rx_b.on_scan(self._on_b)
         self._rx_a.start(); self._rx_b.start()
+        log.info("bridge started (A=%d B=%d)",
+                 self._rx_a.bind_port if hasattr(self._rx_a, "bind_port") else 0,
+                 self._rx_b.bind_port if hasattr(self._rx_b, "bind_port") else 0)
+        self._hb_stop = threading.Event()
+        self._hb_thread = threading.Thread(
+            target=self._heartbeat, daemon=True, name="sick-heartbeat",
+        )
+        self._hb_thread.start()
 
     def stop(self) -> None:
+        if self._hb_stop is not None:
+            self._hb_stop.set()
         self._rx_a.stop(); self._rx_b.stop()
 
     def __enter__(self):  self.start();  return self
@@ -89,8 +124,15 @@ class SickBridge:
 
     # ---- runtime control ---------------------------------------------
 
-    def enable(self):  self._enabled = True
-    def disable(self): self._enabled = False
+    def enable(self):
+        if not self._enabled:
+            log.info("sick enabled")
+        self._enabled = True
+
+    def disable(self):
+        if self._enabled:
+            log.info("sick disabled")
+        self._enabled = False
 
     @property
     def is_enabled(self) -> bool:               return self._enabled
@@ -132,12 +174,20 @@ class SickBridge:
         }
 
     def _on_a(self, scan) -> None:
+        self._last_a = time.monotonic()
+        if not self._seen_a:
+            log.info("scanner A: first scan")
+            self._seen_a = True
         if not self._enabled:
             return
         with self._lock:
             self._state["A"] = self._measure(scan, self._proc_a)
 
     def _on_b(self, scan) -> None:
+        self._last_b = time.monotonic()
+        if not self._seen_b:
+            log.info("scanner B: first scan")
+            self._seen_b = True
         if not self._enabled:
             return
         m_b = self._measure(scan, self._proc_b)
@@ -155,3 +205,12 @@ class SickBridge:
         for cb in list(self._event_cbs):
             try: cb(event)
             except Exception: pass
+
+    def _heartbeat(self) -> None:
+        """Periodic 'alive' line: enabled state + seconds since last scan."""
+        assert self._hb_stop is not None
+        while not self._hb_stop.wait(HEARTBEAT_S):
+            now = time.monotonic()
+            a = (now - self._last_a) if self._last_a else -1.0
+            b = (now - self._last_b) if self._last_b else -1.0
+            log.info("alive en=%d a=%.1f b=%.1f", int(self._enabled), a, b)

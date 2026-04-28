@@ -8,86 +8,80 @@
 #   Main flow of non-RT python program for Warak TSI Gen 1.5 (Upgrade Pack)
 #--------------------------------------------------------------------------------------
 #   V1.1                amontplet                   27/04/2026
-                                                                       
 
-"""main.py — NiceGUI app: SICK + pyADS + cameras + 3D scene."""
 
+"""Main.py — NiceGUI app: SICK + TwinCAT + cameras + 3D scene.
+
+Pattern:  build → page → lifecycle → run.
+Adding a new module = one line in each section. Don't put logic here;
+keep it in the module and expose a `.from_config(...)` constructor.
+"""
 from __future__ import annotations
 
-from dataclasses import dataclass
+import logging
 from pathlib import Path
 
 from nicegui import app, ui
 
-from box_scene import mount_box_scene, on_box_click
-from camera_panel import CameraManager
-from config import AppConfig
-from sick_ads_adapter import attach_pyads
-from sick_bridge import SickBridge
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(message)s",
+    datefmt="%H:%M:%S",
+)
+logging.getLogger("watchfiles").setLevel(logging.WARNING)
+
+from box_scene        import BoxScene
+from camera_panel     import CameraManager
+from camera_publisher import CameraPublisher
+from config           import AppConfig
+from plc_heartbeat    import PLCHeartbeat
+from sick_bridge      import SickBridge
+from sick_publisher   import SickPublisher
+from twincat_comm     import TwinCATComm
 
 
-CONFIG_PATH = Path(__file__).with_name("app_config.toml")
-cfg = AppConfig.load(CONFIG_PATH)
+# ─── config ───────────────────────────────────────────────────────────────────
+
+cfg = AppConfig.load(Path(__file__).with_name("app_config.toml"))
 
 
-# ─── shared state ─────────────────────────────────────────────────────────────
+# ─── build ────────────────────────────────────────────────────────────────────
 
-@dataclass
-class State:
-    bridge:  SickBridge | None    = None
-    pub:     object | None        = None
-    plc:     object | None        = None
-    watcher: object | None        = None
-    cameras: CameraManager | None = None
-    latest:  dict | None          = None
-
-state = State()
-
-
-# ─── lifecycle ────────────────────────────────────────────────────────────────
-
-def on_startup() -> None:
-    bridge = SickBridge(
-        scanner_separation_m=cfg.scanner.separation_m,
-        belt_speed_m_per_s=cfg.scanner.belt_speed_mps,
-        belt_y=cfg.scanner.belt_y,
-    )
-    pub, plc, watcher = attach_pyads(
-        bridge,
-        ams_net_id=cfg.plc.ams_net_id,
-        enable_symbol=cfg.plc.enable_symbol,
-    )
-    bridge.on_measurement(lambda m: setattr(state, "latest", m))
-    bridge.start()
-
-    state.bridge  = bridge
-    state.pub     = pub
-    state.plc     = plc
-    state.watcher = watcher
-    state.cameras = CameraManager(cfg.cameras)
-
-
-def on_shutdown() -> None:
-    if state.watcher is not None:
-        state.watcher.stop()
-    if state.bridge is not None:
-        state.bridge.stop()
-    if state.plc is not None:
-        try:
-            state.plc.close()
-        except Exception:
-            pass
-
-
-app.on_startup(on_startup)
-app.on_shutdown(on_shutdown)
+bridge    = SickBridge.from_config(cfg.scanner)
+plc       = TwinCATComm.from_toml(cfg.plc.vars_file)
+publisher = SickPublisher(bridge, plc, cfg.plc.publisher)
+cameras   = CameraManager.from_config(cfg.cameras)
+cam_pub   = CameraPublisher(cameras, plc, cfg.plc.camera_triggers)
+heartbeat = PLCHeartbeat(plc, cfg.plc.heartbeat) if cfg.plc.heartbeat else None
+scene     = BoxScene.from_config(cfg.boxes)
 
 
 # ─── page ─────────────────────────────────────────────────────────────────────
 
 @ui.page("/")
 def index() -> None:
-    pass
+    scene.mount()
+    cameras.build()
+
+
+# ─── lifecycle ────────────────────────────────────────────────────────────────
+
+@app.on_startup
+def _startup() -> None:
+    plc.open()
+    bridge.start()
+    publisher.start()
+    cam_pub.start()
+    if heartbeat: heartbeat.start()
+
+
+@app.on_shutdown
+def _shutdown() -> None:
+    if heartbeat: heartbeat.stop()
+    cam_pub.stop()
+    publisher.stop()
+    bridge.stop()
+    plc.close()
 
 
 # ─── run ──────────────────────────────────────────────────────────────────────
