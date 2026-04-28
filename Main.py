@@ -40,8 +40,9 @@ from robot_publisher  import RobotPublisher
 from robot_status     import RobotMonitor
 from sick_bridge      import SickBridge
 from sick_publisher   import SickPublisher
+from sizes_panel      import SizesPanel
 from snapshot_archive import SnapshotArchive
-from twincat_comm     import TwinCATComm
+from twincat_comm    import TwinCATComm
 
 
 # ─── config ───────────────────────────────────────────────────────────────────
@@ -65,14 +66,27 @@ scene     = BoxScene.from_config(cfg.boxes)
 db        = DBOrchestrator.from_config(
     cfg, plc=plc, bridge=bridge, archive=archive,
 )
+sizes_ui  = SizesPanel(db.sizes) if db.sizes else None
 
 
 # ─── page ─────────────────────────────────────────────────────────────────────
 
 @ui.page("/")
 def index() -> None:
+    if sizes_ui:
+        ui.link("Sizes admin →", "/sizes").classes("text-sm")
     scene.mount()
     cameras.build()
+
+
+@ui.page("/sizes")
+def sizes_page() -> None:
+    ui.link("← Back", "/").classes("text-sm mb-2")
+    if sizes_ui:
+        sizes_ui.mount()
+    else:
+        ui.label("Sizes store not configured (add [sizes] to app_config.toml)."
+                ).classes("text-gray-500")
 
 
 # ─── lifecycle ────────────────────────────────────────────────────────────────
