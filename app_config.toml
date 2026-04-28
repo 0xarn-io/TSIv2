@@ -94,6 +94,9 @@ timeout_s  = 2.0
 [recipes]
 db_path = "data/recipes.db"
 
+[sizes]
+db_path = "data/sizes.db"
+
 [unit_log]
 db_path   = "data/units.db"
 keep_days = 0          # 0 = keep forever
