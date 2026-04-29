@@ -29,6 +29,8 @@ DATA_LAYER_MODULES = (
     "snapshot_archive.py",
     "robot_publisher.py",
     "robot_status.py",
+    "robot_variables.py",
+    "rws_client.py",
     "plc_heartbeat.py",
     "rtsp_capture.py",
     "config.py",

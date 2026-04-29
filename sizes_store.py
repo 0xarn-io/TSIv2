@@ -93,6 +93,7 @@ class SizesStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            self._migrate(self._conn)
             self._conn.commit()
 
     def stop(self) -> None:
@@ -160,6 +161,31 @@ class SizesStore:
             conn.commit()
 
     # ---- internals ----------------------------------------------------------
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """Drop obsolete columns from earlier schemas. Idempotent."""
+        # Old schemas had width_in / length_in (NOT NULL); the new model is
+        # mm-only. Drop them if present so legacy DBs accept new inserts.
+        OBSOLETE = ("width_in", "length_in")
+        for table in TABLES:
+            present = {r["name"] for r in conn.execute(
+                f"PRAGMA table_info({table})"
+            )}
+            for col in OBSOLETE:
+                if col in present:
+                    try:
+                        conn.execute(f"ALTER TABLE {table} DROP COLUMN {col}")
+                        log.info("sizes: dropped obsolete column %s.%s", table, col)
+                    except sqlite3.OperationalError as e:
+                        # SQLite < 3.35 doesn't support DROP COLUMN. Surface a
+                        # clear message rather than masking the eventual NOT NULL
+                        # failure.
+                        log.warning(
+                            "sizes: could not drop %s.%s (%s) — delete the "
+                            "DB file or upgrade SQLite to 3.35+",
+                            table, col, e,
+                        )
 
     @staticmethod
     def _table(table: str) -> str:

@@ -20,6 +20,7 @@ from recipe_publisher import RecipePublisherConfig
 from recipes_store    import RecipesConfig
 from robot_publisher  import RobotStatusConfig
 from robot_status     import RobotConfig
+from robot_variables  import RobotVariableConfig
 from sick_publisher   import PublisherConfig
 from sizes_publisher  import SizeSetpointConfig
 from sizes_store      import SizesConfig
@@ -106,7 +107,7 @@ class AppConfig:
             ui=UISettings(**d["ui"]),
             cameras=[CameraConfig(name=c["name"], rtsp_url=c["url"])
                      for c in d["cameras"]],
-            robot=(RobotConfig(**d["robot"]) if "robot" in d else None),
+            robot=_load_robot(d.get("robot")),
             recipes=(
                 RecipesConfig(**d["recipes"]) if "recipes" in d else None
             ),
@@ -124,3 +125,21 @@ class AppConfig:
                 if "snapshots" in d else None
             ),
         )
+
+
+def _load_robot(d: dict | None) -> RobotConfig | None:
+    """[robot] section + nested [[robot.vars]] array."""
+    if not d:
+        return None
+    raw_vars = d.get("vars", [])
+    fields = {k: v for k, v in d.items() if k != "vars"}
+    vars_tuple = tuple(
+        RobotVariableConfig(
+            **{
+                **v,
+                "targets": tuple(v.get("targets", ("ui",))),
+            }
+        )
+        for v in raw_vars
+    )
+    return RobotConfig(**fields, vars=vars_tuple)
