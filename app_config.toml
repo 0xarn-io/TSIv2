@@ -82,6 +82,31 @@ verify_ssl = false
 poll_ms    = 2000
 timeout_s  = 2.0
 
+# Optional: declare RAPID symbols to read (and optionally write) via RWS.
+# Each entry is polled at its own poll_ms; values are routed to the listed
+# targets ("ui" = shown in the Vars tab, "log" = appended to errors_log,
+# "plc" = mirrored to the named TwinCAT alias on every change).
+#
+# [[robot.vars]]
+# alias   = "speed_setpoint"
+# task    = "T_ROB1"
+# module  = "MainModule"
+# symbol  = "speed_setpoint"
+# type    = "num"           # num | bool | string
+# mode    = "rw"            # r | rw
+# poll_ms = 1000
+# targets = ["ui"]
+#
+# [[robot.vars]]
+# alias   = "production_count"
+# task    = "T_ROB1"
+# module  = "MainModule"
+# symbol  = "production_count"
+# type    = "num"
+# mode    = "r"
+# poll_ms = 5000
+# targets = ["ui", "log"]
+
 # ---- data layer (all optional) ----------------------------------------------
 # Each section is independent. Comment one out and that store is simply not
 # built — no code change needed. The DBOrchestrator skips missing sections.

@@ -39,6 +39,7 @@ from db_orchestrator  import DBOrchestrator
 from plc_heartbeat    import PLCHeartbeat
 from robot_publisher  import RobotPublisher
 from robot_status     import RobotMonitor
+from robot_variables  import RobotVariablesMonitor
 from sick_bridge      import SickBridge
 from sick_publisher   import SickPublisher
 from snapshot_archive import SnapshotArchive
@@ -65,6 +66,13 @@ robot_pub = (RobotPublisher(robot, plc, cfg.plc.robot_status)
 db        = DBOrchestrator.from_config(
     cfg, plc=plc, bridge=bridge, archive=archive,
 )
+robot_vars = (
+    RobotVariablesMonitor(
+        robot.client, list(cfg.robot.vars),
+        errors_store=db.errors, plc=plc,
+    )
+    if robot and cfg.robot and cfg.robot.vars else None
+)
 
 
 # ─── ui ──────────────────────────────────────────────────────────────────────
@@ -74,12 +82,13 @@ db        = DBOrchestrator.from_config(
 app.add_static_files("/static", str(Path(__file__).with_name("static")))
 
 dashboard = Dashboard.build(
-    cameras       = cameras,
-    robot_monitor = robot,
-    recipes_store = db.recipes,
-    sizes_store   = db.sizes,
-    errors_store  = db.errors,
-    title         = cfg.ui.title,
+    cameras            = cameras,
+    robot_monitor      = robot,
+    robot_vars_monitor = robot_vars,
+    recipes_store      = db.recipes,
+    sizes_store        = db.sizes,
+    errors_store       = db.errors,
+    title              = cfg.ui.title,
 )
 dashboard.register_routes()
 
@@ -89,26 +98,28 @@ dashboard.register_routes()
 @app.on_startup
 def _startup() -> None:
     plc.open()
-    if archive:   archive.start()        # one-shot prune
+    if archive:    archive.start()        # one-shot prune
     bridge.start()
     publisher.start()
     cam_pub.start()
-    if heartbeat: heartbeat.start()
-    if robot:     robot.start()
-    if robot_pub: robot_pub.start()
+    if heartbeat:  heartbeat.start()
+    if robot:      robot.start()
+    if robot_pub:  robot_pub.start()
     db.start()
+    if robot_vars: robot_vars.start()     # depends on db.errors being open
 
 
 @app.on_shutdown
 def _shutdown() -> None:
+    if robot_vars: robot_vars.stop()
     db.stop()
-    if robot_pub: robot_pub.stop()
-    if robot:     robot.stop()
-    if heartbeat: heartbeat.stop()
+    if robot_pub:  robot_pub.stop()
+    if robot:      robot.stop()
+    if heartbeat:  heartbeat.stop()
     cam_pub.stop()
     publisher.stop()
     bridge.stop()
-    if archive:   archive.stop()
+    if archive:    archive.stop()
     plc.close()
 
 
