@@ -1,0 +1,30 @@
+# Robot RAPID variables exposed via RWS.
+#
+# Each [[vars]] entry is polled at its own poll_ms cadence and routed to the
+# listed targets:
+#   "ui"   — shown live on the /vars tab
+#   "log"  — appended to errors_log on every observed change (severity=info)
+#   "plc"  — mirrored to the named TwinCAT alias on every observed change
+#            (requires `plc_alias` matching an entry in plc_signals.toml)
+#
+# Comment all of them out (or delete this file) to disable the Vars tab.
+
+# [[vars]]
+# alias    = "speed_setpoint"
+# task     = "T_ROB1"
+# module   = "MainModule"
+# symbol   = "speed_setpoint"
+# type     = "num"           # num | bool | string
+# mode     = "rw"            # r | rw
+# poll_ms  = 1000
+# targets  = ["ui"]
+#
+# [[vars]]
+# alias    = "production_count"
+# task     = "T_ROB1"
+# module   = "MainModule"
+# symbol   = "production_count"
+# type     = "num"
+# mode     = "r"
+# poll_ms  = 5000
+# targets  = ["ui", "log"]

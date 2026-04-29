@@ -74,9 +74,10 @@ class AppConfig:
         path = Path(path)
         with path.open("rb") as f:
             d = tomllib.load(f)
+        base = path.parent
 
         # PLC vars_file is relative to app_config.toml's directory.
-        vars_file = str((path.parent / d["plc"]["vars_file"]).resolve())
+        vars_file = str((base / d["plc"]["vars_file"]).resolve())
 
         return cls(
             plc=PLCSettings(
@@ -107,7 +108,7 @@ class AppConfig:
             ui=UISettings(**d["ui"]),
             cameras=[CameraConfig(name=c["name"], rtsp_url=c["url"])
                      for c in d["cameras"]],
-            robot=_load_robot(d.get("robot")),
+            robot=_load_robot(d.get("robot"), base),
             recipes=(
                 RecipesConfig(**d["recipes"]) if "recipes" in d else None
             ),
@@ -127,12 +128,28 @@ class AppConfig:
         )
 
 
-def _load_robot(d: dict | None) -> RobotConfig | None:
-    """[robot] section + nested [[robot.vars]] array."""
+def _load_robot(d: dict | None, base: Path) -> RobotConfig | None:
+    """[robot] section.
+
+    The variable list is loaded from a separate file pointed at by
+    `vars_file` (path is resolved relative to app_config.toml). Inline
+    `[[robot.vars]]` blocks are still honored as a legacy escape hatch.
+    """
     if not d:
         return None
-    raw_vars = d.get("vars", [])
-    fields = {k: v for k, v in d.items() if k != "vars"}
+
+    # vars_file (preferred) — load [[vars]] entries from a sibling TOML.
+    vars_file = d.get("vars_file")
+    raw_vars: list[dict] = []
+    if vars_file:
+        p = (base / vars_file).resolve()
+        if p.is_file():
+            with p.open("rb") as f:
+                raw_vars = list(tomllib.load(f).get("vars", []))
+    # Legacy: inline [[robot.vars]] blocks.
+    raw_vars += list(d.get("vars", []))
+
+    fields = {k: v for k, v in d.items() if k not in ("vars", "vars_file")}
     vars_tuple = tuple(
         RobotVariableConfig(
             **{
