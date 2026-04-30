@@ -89,13 +89,13 @@ def test_write_rapid_acquires_and_releases_mastership():
     assert c.write_rapid("T_ROB1", "MainModule", "n", "42") is True
 
     paths = [(url, p.get("action")) for url, p in calls]
-    assert paths[0]  == ("https://1.2.3.4/rw/mastership/edit", "request")
+    assert paths[0]  == ("https://1.2.3.4/rw/mastership", "request")
     # POST .../data (no ?action=set query) — body carries the value=...
     assert paths[1]  == (
         "https://1.2.3.4/rw/rapid/symbol/RAPID/T_ROB1/MainModule/n/data",
         None,
     )
-    assert paths[-1] == ("https://1.2.3.4/rw/mastership/edit", "release")
+    assert paths[-1] == ("https://1.2.3.4/rw/mastership", "release")
 
 
 def test_write_rapid_releases_mastership_even_when_set_fails():

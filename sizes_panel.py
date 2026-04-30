@@ -130,15 +130,15 @@ class SizesPanel:
         title = (f"Edit size #{existing.id}") if existing else "New size"
 
         with ui.dialog() as dialog, ui.card().classes(
-            "min-w-[460px] max-h-[85vh] p-0 overflow-hidden flex flex-col"
+            "min-w-[460px] p-0 overflow-hidden"
         ):
             with ui.element("div").classes(
-                "bg-[#0053A1] text-white px-5 py-3 flex-none"
+                "bg-[#0053A1] text-white px-5 py-3"
             ):
                 ui.label(title).classes("text-base font-semibold")
 
             with ui.column().classes(
-                "gap-4 p-5 w-full flex-1 overflow-y-auto"
+                "gap-4 p-5 w-full max-h-[65vh] overflow-y-auto"
             ):
                 with ui.row().classes("gap-3 w-full items-center"):
                     name = ui.input(
@@ -193,43 +193,46 @@ class SizesPanel:
                         on_click=fill_mm_from_inches,
                     ).props("flat dense color=primary").classes("mt-2")
 
-                def submit() -> None:
-                    raw_slot = slot.value
-                    slot_val: int | None = None
-                    if raw_slot not in (None, ""):
-                        try:
-                            slot_val = int(raw_slot)
-                        except (TypeError, ValueError):
-                            ui.notify("Slot must be 0–19 or blank", type="warning")
-                            return
+            def submit() -> None:
+                raw_slot = slot.value
+                slot_val: int | None = None
+                if raw_slot not in (None, ""):
                     try:
-                        s = Size(
-                            id=existing.id if existing else None,
-                            name=(name.value or "").strip(),
-                            width_mm=int(wmm.value or 0),
-                            length_mm=int(lmm.value or 0),
-                            slot=slot_val,
-                            station3=bool(station3.value),
-                        )
-                        if not s.name:
-                            ui.notify("Name is required", type="warning")
-                            return
-                        if existing:
-                            self.store.update(s)
-                        else:
-                            self.store.add(s)
-                    except Exception as e:
-                        log.exception("sizes save failed")
-                        ui.notify(f"Save failed: {e}", type="negative")
+                        slot_val = int(raw_slot)
+                    except (TypeError, ValueError):
+                        ui.notify("Slot must be 0–19 or blank", type="warning")
                         return
-                    dialog.close()
-                    self._refresh()
+                try:
+                    s = Size(
+                        id=existing.id if existing else None,
+                        name=(name.value or "").strip(),
+                        width_mm=int(wmm.value or 0),
+                        length_mm=int(lmm.value or 0),
+                        slot=slot_val,
+                        station3=bool(station3.value),
+                    )
+                    if not s.name:
+                        ui.notify("Name is required", type="warning")
+                        return
+                    if existing:
+                        self.store.update(s)
+                    else:
+                        self.store.add(s)
+                except Exception as e:
+                    log.exception("sizes save failed")
+                    ui.notify(f"Save failed: {e}", type="negative")
+                    return
+                dialog.close()
+                self._refresh()
 
-                with ui.row().classes("justify-end gap-2 w-full pt-1"):
-                    ui.button("Cancel", on_click=dialog.close).props("flat")
-                    ui.button(
-                        "Save", icon="save", on_click=submit,
-                    ).props("color=primary unelevated")
+            with ui.row().classes(
+                "justify-end gap-2 w-full px-5 py-3 "
+                "border-t border-[#E5E9EE] bg-white"
+            ):
+                ui.button("Cancel", on_click=dialog.close).props("flat")
+                ui.button(
+                    "Save", icon="save", on_click=submit,
+                ).props("color=primary unelevated")
 
         dialog.open()
 

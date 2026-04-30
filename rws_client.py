@@ -226,10 +226,30 @@ class RWSClient:
     # ---- mastership helpers ------------------------------------------------
 
     def _mastership(self, action: str, *, silent: bool = False) -> bool:
-        r = self.post(
-            "/rw/mastership/edit", params={"action": action}, silent=silent,
-        )
-        return bool(r is not None and r.ok)
+        """Request or release edit mastership.
+
+        OmniCore exposes two URL shapes depending on firmware:
+            POST /rw/mastership/edit?action=request   (RW 7.x newer)
+            POST /rw/mastership?action=request        (older / universal)
+        Try the universal form first — it works on every controller we've
+        tested. Fall back to the per-domain path only if the first 404s.
+        """
+        for path in ("/rw/mastership", "/rw/mastership/edit"):
+            r = self.post(path, params={"action": action}, silent=True)
+            if r is not None and r.ok:
+                return True
+            if r is not None and r.status_code != 404:
+                # Non-404 means the path was found but rejected — don't
+                # try other paths (would mask the real error).
+                if not silent:
+                    log.warning(
+                        "mastership %s failed: %s %s",
+                        action, r.status_code, r.text[:120],
+                    )
+                return False
+        if not silent:
+            log.warning("mastership %s: no known URI accepted by controller", action)
+        return False
 
 
 # ---- module helpers --------------------------------------------------------
