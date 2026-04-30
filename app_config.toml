@@ -90,7 +90,7 @@ elog_include_info = false
 # Mirror the Master / Master_Dimmensions RAPID arrays into the sizes DB.
 # Set master_poll_ms = 0 to disable. The wood flag (3rd col of
 # Master_Dimmensions) routes the row: 1 → others, 0 → cardboard.
-master_poll_ms     = 8000
+master_poll_ms     = 5000
 master_task        = "T_ROB1"
 master_module      = "Stations"
 master_symbol      = "Master"
