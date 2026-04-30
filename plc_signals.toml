@@ -94,11 +94,14 @@ prefix = "pyADS"
 code      = { name = "nRecipeCode",     type = "DINT" }
 setpoints = { name = "RecipeSetpoints", type = "ST_RecipeSetpoints" }
 
-[groups.size]
-prefix = "pyADS"
-
-[groups.size.vars]
-main_id            = { name = "nMainSizeId",       type = "INT" }
-main_setpoints     = { name = "MainSizeSetpoints", type = "ST_SizeSetpoints" }
-station3_id        = { name = "nSt3SizeId",        type = "INT" }
-station3_setpoints = { name = "St3SizeSetpoints",  type = "ST_SizeSetpoints" }
+# Active-size bridge symbols — declare here when the PLC starts
+# consuming mm dimensions (currently unused; see [[plc.size_setpoints]]
+# in app_config.toml).
+# [groups.size]
+# prefix = "pyADS"
+#
+# [groups.size.vars]
+# main_id            = { name = "nMainSizeId",       type = "INT" }
+# main_setpoints     = { name = "MainSizeSetpoints", type = "ST_SizeSetpoints" }
+# station3_id        = { name = "nSt3SizeId",        type = "INT" }
+# station3_setpoints = { name = "St3SizeSetpoints",  type = "ST_SizeSetpoints" }

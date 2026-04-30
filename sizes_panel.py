@@ -130,14 +130,16 @@ class SizesPanel:
         title = (f"Edit size #{existing.id}") if existing else "New size"
 
         with ui.dialog() as dialog, ui.card().classes(
-            "min-w-[460px] p-0 overflow-hidden"
+            "min-w-[460px] max-h-[85vh] p-0 overflow-hidden flex flex-col"
         ):
             with ui.element("div").classes(
-                "bg-[#0053A1] text-white px-5 py-3"
+                "bg-[#0053A1] text-white px-5 py-3 flex-none"
             ):
                 ui.label(title).classes("text-base font-semibold")
 
-            with ui.column().classes("gap-4 p-5 w-full"):
+            with ui.column().classes(
+                "gap-4 p-5 w-full flex-1 overflow-y-auto"
+            ):
                 with ui.row().classes("gap-3 w-full items-center"):
                     name = ui.input(
                         "Name",
