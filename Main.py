@@ -31,6 +31,24 @@ logging.basicConfig(
 )
 logging.getLogger("watchfiles").setLevel(logging.WARNING)
 
+
+# NiceGUI's Timer task can fire one extra tick after its parent slot
+# is torn down (race during page navigation), then logs the resulting
+# RuntimeError + traceback. The error is cosmetic — the task is already
+# disposed. Drop it so the console isn't spammed.
+class _DropParentSlotDeletedFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if "parent slot of the element has been deleted" in record.getMessage():
+            return False
+        if record.exc_info and record.exc_info[1] is not None:
+            if "parent slot" in str(record.exc_info[1]):
+                return False
+        return True
+
+
+for _name in ("", "nicegui", "nicegui.background_tasks"):
+    logging.getLogger(_name).addFilter(_DropParentSlotDeletedFilter())
+
 from camera_panel     import CameraManager
 from camera_publisher import CameraPublisher
 from config           import AppConfig
