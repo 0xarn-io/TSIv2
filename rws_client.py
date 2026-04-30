@@ -50,12 +50,16 @@ class RWSClient:
 
     def get(
         self, path: str, *, params=None, silent: bool = False,
-        timeout: float | None = None,
+        timeout: float | None = None, accept: str | None = None,
     ) -> Optional[dict]:
-        """JSON GET. Returns parsed dict on 200, else None (logged unless silent)."""
+        """JSON GET. Returns parsed dict on 200, else None (logged unless silent).
+
+        `accept` overrides the session-level Accept header for this call only.
+        """
         try:
+            headers = {"Accept": accept} if accept else None
             r = self._session.get(
-                self._url(path), params=params,
+                self._url(path), params=params, headers=headers,
                 timeout=timeout or self.cfg.timeout_s,
             )
             if r.status_code == 200:
@@ -100,31 +104,26 @@ class RWSClient:
     # ---- RAPID symbol convenience ------------------------------------------
 
     @staticmethod
-    def _rapid_symbol_uri(task: str, module: str, symbol: str) -> str:
-        """URL-encoded RAPID symbol URI used as a single path segment.
-
-        OmniCore RWS treats the symbol URI as one opaque resource id;
-        the slashes inside MUST be percent-encoded so the path looks like:
-
-            /rw/rapid/symbol/RAPID%2FT_ROB1%2FStations%2FMaster/data
-                              └────── symbol uri ──────┘ subresource
+    def _rapid_path(task: str, module: str, symbol: str) -> str:
+        """Per the RWS RAPID Service docs:
+            /rw/rapid/symbol/data/RAPID/<task>/<module>/<symbol>
         """
-        return f"RAPID%2F{task}%2F{module}%2F{symbol}"
-
-    @staticmethod
-    def _rapid_path(task: str, module: str, symbol: str,
-                    subresource: str = "data") -> str:
-        return (
-            "/rw/rapid/symbol/"
-            + RWSClient._rapid_symbol_uri(task, module, symbol)
-            + "/" + subresource
-        )
+        return f"/rw/rapid/symbol/data/RAPID/{task}/{module}/{symbol}"
 
     def read_rapid(
         self, task: str, module: str, symbol: str,
     ) -> Optional[str]:
-        """Read a RAPID symbol's raw value string. Returns None on failure."""
-        obj = self.get(self._rapid_path(task, module, symbol, "data"))
+        """Read a RAPID symbol's raw value string. Returns None on failure.
+
+        The data subresource serves XML by default and won't honour
+        `application/hal+json;v=2.0` (which `properties` does); ask for
+        plain JSON via `?json=1` and override Accept accordingly.
+        """
+        obj = self.get(
+            self._rapid_path(task, module, symbol),
+            params={"json": "1"},
+            accept="application/json",
+        )
         if obj is None:
             return None
         return _extract_rapid_value(obj)
@@ -141,7 +140,7 @@ class RWSClient:
             return False
         try:
             r = self.post(
-                self._rapid_path(task, module, symbol, "data"),
+                self._rapid_path(task, module, symbol),
                 params={"action": "set"},
                 data={"value": value},
             )
