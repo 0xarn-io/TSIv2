@@ -291,19 +291,28 @@ def _skip_ws(s: str, pos: int) -> int:
 def _extract_rapid_value(obj: dict) -> Optional[str]:
     """Pull the `value` field out of an RWS RAPID symbol response.
 
-    RWS shapes vary across firmware versions; check several common ones.
+    OmniCore returns:
+        {"_links": …, "status": …, "state": [{"_type": "rap-data", "value": "…"}]}
+    Older shapes have surfaced under `_embedded._state[0].value` and
+    `_embedded.resources[0].value`; check all three.
     """
+    # Top-level `state` (current OmniCore shape).
+    state = obj.get("state")
+    if isinstance(state, list) and state and isinstance(state[0], dict):
+        v = state[0].get("value")
+        if v is not None:
+            return str(v)
+
     embedded = obj.get("_embedded") or {}
-    # HAL+JSON shapes — keys we've seen in the wild: _state, state, resources.
     for key in ("_state", "state", "resources"):
         block = embedded.get(key)
         if isinstance(block, list) and block and isinstance(block[0], dict):
             v = block[0].get("value")
             if v is not None:
                 return str(v)
-    # Flat shape: {"value": "..."}.
     if "value" in obj:
         return str(obj["value"])
+
     log.warning(
         "RAPID value not found; response keys=%s embedded keys=%s",
         list(obj.keys()),
