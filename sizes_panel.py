@@ -1,7 +1,8 @@
 """sizes_panel.py — NiceGUI admin page for the SizesStore.
 
-Two tabs (cardboard / others); per-row edit + delete; "+ Add" opens a
-dialog with mm fields and a non-stored inches calculator.
+Single table; rows show ID / Slot / Name / W / L / St3 plus edit/delete.
+"+ Add" opens a dialog with mm fields, station3 checkbox, and a non-stored
+inches calculator.
 
 Usage in dashboard.py:
     panel = SizesPanel(db.sizes)
@@ -13,14 +14,14 @@ import logging
 
 from nicegui import ui
 
-from sizes_store import Size, SizesStore, TABLES
+from sizes_store import Size, SizesStore
 from theme       import card
 
 log = logging.getLogger(__name__)
 
 
 def _mm_to_in(mm: int) -> int:
-    """Display-only conversion. Round to nearest inch (matches operator quotes)."""
+    """Display-only conversion. Round to nearest inch."""
     return int(round(mm / 25.4))
 
 
@@ -29,51 +30,38 @@ def _in_to_mm(inches: int) -> int:
 
 
 class SizesPanel:
-    """Admin UI for cardboard + others size catalogs."""
+    """Admin UI for the size catalog."""
 
     def __init__(self, store: SizesStore):
         self.store = store
-        self._containers: dict[str, ui.column] = {}
+        self._container: ui.column | None = None
 
     # ---- top-level mount ----------------------------------------------------
 
     def mount(self) -> None:
         with ui.column().classes("w-full gap-4 p-6"):
-            with card():
-                with ui.tabs().props("inline-label dense").classes(
-                    "text-[#0053A1]"
-                ) as tabs:
-                    tab_objs = {t: ui.tab(t.capitalize()) for t in TABLES}
-                with ui.tab_panels(
-                    tabs, value=tab_objs[TABLES[0]],
-                ).classes("w-full bg-transparent"):
-                    for t in TABLES:
-                        with ui.tab_panel(tab_objs[t]).classes("p-0 pt-3"):
-                            self._build_tab(t)
+            with ui.row().classes("items-center mb-1 gap-2"):
+                ui.button(
+                    "New size", icon="add",
+                    on_click=lambda: self._open_dialog(),
+                ).props("color=primary unelevated")
+                ui.button(
+                    "Refresh", icon="refresh",
+                    on_click=self._refresh,
+                ).props("flat color=primary")
+            self._container = ui.column().classes("w-full gap-1")
+        self._refresh()
 
-    # ---- per-tab UI ---------------------------------------------------------
+    # ---- list ---------------------------------------------------------------
 
-    def _build_tab(self, table: str) -> None:
-        with ui.row().classes("items-center mb-3 gap-2"):
-            ui.button(
-                f"New {table[:-1] if table.endswith('s') else table}",
-                icon="add",
-                on_click=lambda t=table: self._open_dialog(t),
-            ).props("color=primary unelevated")
-            ui.button(
-                "Refresh", icon="refresh",
-                on_click=lambda t=table: self._refresh(t),
-            ).props("flat color=primary")
-        self._containers[table] = ui.column().classes("w-full gap-1")
-        self._refresh(table)
-
-    def _refresh(self, table: str) -> None:
-        col = self._containers[table]
-        col.clear()
-        with col:
+    def _refresh(self) -> None:
+        if self._container is None:
+            return
+        self._container.clear()
+        with self._container:
             self._render_header()
             try:
-                rows = self.store.list(table)
+                rows = self.store.list()
             except Exception as e:
                 ui.label(f"Failed to load: {e}").classes("text-red-500")
                 return
@@ -83,7 +71,7 @@ class SizesPanel:
                 )
                 return
             for s in rows:
-                self._render_row(table, s)
+                self._render_row(s)
 
     @staticmethod
     def _render_header() -> None:
@@ -98,9 +86,10 @@ class SizesPanel:
             ui.label("L (mm)").classes("w-24 text-right")
             ui.label("≈ W (in)").classes("w-20 text-right text-gray-400")
             ui.label("≈ L (in)").classes("w-20 text-right text-gray-400")
+            ui.label("St 3").classes("w-12 text-center")
             ui.label("").classes("flex-grow")
 
-    def _render_row(self, table: str, s: Size) -> None:
+    def _render_row(self, s: Size) -> None:
         with ui.row().classes(
             "w-full items-center gap-3 px-3 py-2 text-sm "
             "border-b border-[#E5E9EE] hover:bg-[#F4F6F8]"
@@ -121,21 +110,24 @@ class SizesPanel:
             ui.label(str(_mm_to_in(s.length_mm))).classes(
                 "w-20 text-right font-mono text-gray-400"
             )
+            ui.label("✓" if s.station3 else "—").classes(
+                f"w-12 text-center font-mono "
+                f"{'text-[#118938]' if s.station3 else 'text-gray-300'}"
+            )
             with ui.row().classes("flex-grow justify-end gap-1"):
                 ui.button(
                     icon="edit",
-                    on_click=lambda s=s, t=table: self._open_dialog(t, s),
+                    on_click=lambda s=s: self._open_dialog(s),
                 ).props("dense flat color=primary").tooltip("Edit")
                 ui.button(
                     icon="delete",
-                    on_click=lambda sid=s.id, t=table: self._delete(t, sid),
+                    on_click=lambda sid=s.id: self._delete(sid),
                 ).props("dense flat color=negative").tooltip("Delete")
 
     # ---- dialog (add / edit) ------------------------------------------------
 
-    def _open_dialog(self, table: str, existing: Size | None = None) -> None:
-        title = (f"Edit {table[:-1] if table.endswith('s') else table} "
-                 f"#{existing.id}") if existing else f"New {table[:-1] if table.endswith('s') else table}"
+    def _open_dialog(self, existing: Size | None = None) -> None:
+        title = (f"Edit size #{existing.id}") if existing else "New size"
 
         with ui.dialog() as dialog, ui.card().classes(
             "min-w-[460px] p-0 overflow-hidden"
@@ -171,6 +163,12 @@ class SizesPanel:
                             format="%d",
                         )
 
+                with card("Station 3"):
+                    station3 = ui.checkbox(
+                        "Selectable at station 3",
+                        value=bool(existing.station3) if existing else False,
+                    )
+
                 with card("Inches calculator (not stored)"):
                     with ui.grid(columns=2).classes("w-full gap-3"):
                         win = ui.number(
@@ -200,7 +198,7 @@ class SizesPanel:
                         try:
                             slot_val = int(raw_slot)
                         except (TypeError, ValueError):
-                            ui.notify("Slot must be an integer 0–19", type="warning")
+                            ui.notify("Slot must be 0–19 or blank", type="warning")
                             return
                     try:
                         s = Size(
@@ -209,20 +207,21 @@ class SizesPanel:
                             width_mm=int(wmm.value or 0),
                             length_mm=int(lmm.value or 0),
                             slot=slot_val,
+                            station3=bool(station3.value),
                         )
                         if not s.name:
                             ui.notify("Name is required", type="warning")
                             return
                         if existing:
-                            self.store.update(table, s)
+                            self.store.update(s)
                         else:
-                            self.store.add(table, s)
+                            self.store.add(s)
                     except Exception as e:
                         log.exception("sizes save failed")
                         ui.notify(f"Save failed: {e}", type="negative")
                         return
                     dialog.close()
-                    self._refresh(table)
+                    self._refresh()
 
                 with ui.row().classes("justify-end gap-2 w-full pt-1"):
                     ui.button("Cancel", on_click=dialog.close).props("flat")
@@ -234,9 +233,9 @@ class SizesPanel:
 
     # ---- delete -------------------------------------------------------------
 
-    def _delete(self, table: str, sid: int) -> None:
+    def _delete(self, sid: int) -> None:
         with ui.dialog() as dialog, ui.card().classes("min-w-[360px]"):
-            ui.label(f"Delete {table} #{sid}?").classes(
+            ui.label(f"Delete size #{sid}?").classes(
                 "text-base font-semibold"
             )
             ui.label("This permanently removes the row.").classes(
@@ -247,12 +246,12 @@ class SizesPanel:
 
                 def go() -> None:
                     try:
-                        self.store.delete(table, sid)
+                        self.store.delete(sid)
                     except Exception as e:
                         ui.notify(f"Delete failed: {e}", type="negative")
                         return
                     dialog.close()
-                    self._refresh(table)
+                    self._refresh()
 
                 ui.button(
                     "Delete", icon="delete", on_click=go,

@@ -28,18 +28,20 @@ status_alias = "robot.status"
 code_alias      = "recipe.code"
 setpoints_alias = "recipe.setpoints"
 
-# Optional: per-table active-size bridge. Each entry pairs a DINT id
-# (PLC writes) with an ST_SizeSetpoints struct (Python writes) for one
-# table in the sizes DB. Requires [sizes] below. Drop the array to disable.
+# Optional: active-size bridge. Each entry pairs a DINT size id
+# (PLC writes) with an ST_SizeSetpoints struct (Python writes). Multiple
+# entries let you run independent selectors (e.g. main station vs.
+# station 3). The `name` field is just a log label. Requires [sizes]
+# below. Drop the array to disable.
 [[plc.size_setpoints]]
-table           = "cardboard"
-code_alias      = "size.cardboard_id"
-setpoints_alias = "size.cardboard_setpoints"
+name            = "main"
+code_alias      = "size.main_id"
+setpoints_alias = "size.main_setpoints"
 
 [[plc.size_setpoints]]
-table           = "others"
-code_alias      = "size.others_id"
-setpoints_alias = "size.others_setpoints"
+name            = "station3"
+code_alias      = "size.station3_id"
+setpoints_alias = "size.station3_setpoints"
 
 # Map PLC bool aliases (in plc_signals.toml) to camera names (below).
 # Rising edge on the PLC bool fires a snapshot from that camera.
@@ -88,8 +90,8 @@ elog_limit        = 50
 elog_include_info = false
 
 # Mirror the Master / Master_Dimmensions RAPID arrays into the sizes DB.
-# Set master_poll_ms = 0 to disable. The wood flag (3rd col of
-# Master_Dimmensions) routes the row: 1 → others, 0 → cardboard.
+# Set master_poll_ms = 0 to disable. The 3rd column of Master_Dimmensions
+# is `station3` (1 = size selectable at station 3).
 master_poll_ms     = 5000
 master_task        = "T_ROB1"
 master_module      = "Stations"

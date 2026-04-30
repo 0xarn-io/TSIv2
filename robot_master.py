@@ -3,23 +3,27 @@ into the local SizesStore.
 
 The robot owns two PERS arrays (RAPID):
     Master            : string[20,1]   — slot name
-    Master_Dimmensions: num[20,3]      — [width_mm, length_mm, wood01]
+    Master_Dimmensions: num[20,3]      — [width_mm, length_mm, station3_01]
 
-Slot indexing is 1..20 in RAPID; we use 0..19 internally and translate at
-the boundary.
+The third number on each Master_Dimmensions row is a per-row boolean —
+whether the size is selectable at station 3 (1 = yes, 0 = no). The
+controller's TypeCalc helper happens to call it `wood` for legacy
+reasons; we mirror it as `station3` in the DB.
+
+Slot indexing is 1..20 in RAPID; we use 0..19 internally and translate
+at the boundary.
 
 Mirroring rules:
-    Robot slot has data       → upsert_slot in DB (wood flag picks the table).
+    Robot slot has data       → upsert_slot in DB.
     Robot slot is empty       → clear_slot in DB.
-    DB row added/updated      → push (name, w, l, wood) to that slot.
+    DB row added/updated      → push (name, w, l, station3) to that slot.
     DB row deleted            → write empty values to that slot.
 
-Loop-back guard: the monitor maintains a per-slot `_last_pushed` snapshot;
-robot polls that come back with the same value the monitor just wrote
-are skipped, so a DB→robot push doesn't immediately re-fire a robot→DB
-write of the same data. DB-side mutations done while applying an inbound
-robot snapshot are wrapped in `sizes.silent()` so on_change doesn't echo
-back to the robot.
+Loop-back guard: the monitor maintains a per-slot snapshot; robot polls
+that come back identical to the last value the monitor wrote are skipped,
+so a DB→robot push doesn't re-fire a robot→DB write of the same data.
+DB-side mutations done while applying an inbound robot snapshot are
+wrapped in `sizes.silent()` so on_change doesn't echo back to the robot.
 
 No nicegui import — strictly data layer.
 """
@@ -29,10 +33,7 @@ import logging
 import threading
 from dataclasses import dataclass
 
-from sizes_store import (
-    SLOT_COUNT, Size, SizesChange, SizesStore,
-    is_wood_table, table_for_wood,
-)
+from sizes_store import SLOT_COUNT, Size, SizesChange, SizesStore
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ class _Slot:
     name:      str
     width_mm:  int
     length_mm: int
-    wood:      bool
+    station3:  bool
 
     @property
     def empty(self) -> bool:
@@ -53,7 +54,7 @@ class _Slot:
         )
 
 
-_EMPTY_SLOT = _Slot(name="", width_mm=0, length_mm=0, wood=False)
+_EMPTY_SLOT = _Slot(name="", width_mm=0, length_mm=0, station3=False)
 
 
 class RobotMasterMonitor:
@@ -65,7 +66,7 @@ class RobotMasterMonitor:
         sizes:  SizesStore,
         *,
         task:           str = "T_ROB1",
-        module:         str = "MainModule",
+        module:         str = "Stations",
         master_symbol:  str = "Master",
         dims_symbol:    str = "Master_Dimmensions",
         poll_ms:        int = 2000,
@@ -89,8 +90,6 @@ class RobotMasterMonitor:
     # ---- lifecycle ----------------------------------------------------------
 
     def start(self) -> None:
-        # Subscribe to DB edits so our outbound mirror runs synchronously
-        # the moment something is added/updated/deleted in the panel.
         self._unsub_db = self.sizes.on_change(self._on_db_change)
         self._stop = threading.Event()
         self._thread = threading.Thread(
@@ -109,11 +108,10 @@ class RobotMasterMonitor:
             self._thread.join(timeout=2.0)
             self._thread = None
 
-    # ---- inbound poll (robot → DB) ----------------------------------------
+    # ---- inbound poll (robot → DB) -----------------------------------------
 
     def _run(self) -> None:
         period_s = self.poll_ms / 1000.0
-        # Tick once immediately, then on every period.
         self._poll_once()
         while not self._stop.wait(period_s):
             self._poll_once()
@@ -128,8 +126,7 @@ class RobotMasterMonitor:
             return
         changed = 0
         for i, slot in enumerate(slots):
-            prev = self._last_robot[i]
-            if slot == prev:
+            if slot == self._last_robot[i]:
                 continue
             self._apply_inbound(i, slot)
             self._last_robot[i] = slot
@@ -167,15 +164,15 @@ class RobotMasterMonitor:
                     else name_cell
                 ) or ""
                 dims_row = dims[i] if i < len(dims) else [0, 0, 0]
-                w  = int(dims_row[0]) if len(dims_row) > 0 else 0
-                ln = int(dims_row[1]) if len(dims_row) > 1 else 0
-                wd = bool(int(dims_row[2])) if len(dims_row) > 2 else False
+                w        = int(dims_row[0]) if len(dims_row) > 0 else 0
+                ln       = int(dims_row[1]) if len(dims_row) > 1 else 0
+                station3 = bool(int(dims_row[2])) if len(dims_row) > 2 else False
             except Exception as e:
                 log.warning("robot master parse slot %d failed: %s", i, e)
                 slots.append(_EMPTY_SLOT)
                 continue
             slots.append(_Slot(
-                name=str(name), width_mm=w, length_mm=ln, wood=wd,
+                name=str(name), width_mm=w, length_mm=ln, station3=station3,
             ))
         return slots
 
@@ -191,7 +188,7 @@ class RobotMasterMonitor:
                         name      = robot.name,
                         width_mm  = robot.width_mm,
                         length_mm = robot.length_mm,
-                        wood      = robot.wood,
+                        station3  = robot.station3,
                     )
             except Exception as e:
                 log.warning(
@@ -199,48 +196,42 @@ class RobotMasterMonitor:
                     slot, robot, e,
                 )
 
-    # ---- outbound (DB → robot) --------------------------------------------
+    # ---- outbound (DB → robot) ---------------------------------------------
 
     def _on_db_change(self, ev: SizesChange) -> None:
         """Handler for SizesStore.on_change; fires from the editing thread."""
-        # On delete we don't have a Size — but we know the sid; we have to
-        # find which slot it occupied via _last_robot…  simpler: scan the DB
-        # for any other row at any slot, and clear slots that no longer
-        # have a DB owner. Since deletes are rare, full reconciliation is
-        # cheap enough.
         if ev.op == "delete":
+            # Don't know the slot from the event payload — reconcile all
+            # 20 slots against the current DB state. Cheap.
             self._reconcile()
             return
 
         s = ev.size
         if s is None or s.slot is None:
-            # Add/update of a slot-less row — nothing to push.
             return
         slot = int(s.slot)
         if not (0 <= slot < SLOT_COUNT):
             return
-        wood = is_wood_table(ev.table)
         new_slot = _Slot(
             name=s.name, width_mm=int(s.width_mm),
-            length_mm=int(s.length_mm), wood=wood,
+            length_mm=int(s.length_mm), station3=bool(s.station3),
         )
         if self._last_robot[slot] == new_slot:
             return
         self._push_slot(slot, new_slot)
 
     def _reconcile(self) -> None:
-        """After a delete, clear robot slots that no longer have a DB row."""
+        """Walk all 20 slots, push any slot whose DB state differs from cache."""
         for slot in range(SLOT_COUNT):
             current = self.sizes.get_slot(slot)
             if current is None:
                 if not self._last_robot[slot].empty:
                     self._push_slot(slot, _EMPTY_SLOT)
                 continue
-            table, size = current
-            wood = is_wood_table(table)
             new_slot = _Slot(
-                name=size.name, width_mm=int(size.width_mm),
-                length_mm=int(size.length_mm), wood=wood,
+                name=current.name, width_mm=int(current.width_mm),
+                length_mm=int(current.length_mm),
+                station3=bool(current.station3),
             )
             if self._last_robot[slot] != new_slot:
                 self._push_slot(slot, new_slot)
@@ -249,14 +240,13 @@ class RobotMasterMonitor:
         """Write a single slot's name + dims back to the robot (full-array
         rewrite — RWS doesn't expose per-element writes for arrays).
         """
-        # Compose the full arrays from the cache, with this slot replaced.
         master_array = []
         dims_array   = []
         for i, prev in enumerate(self._last_robot):
             cur = new_slot if i == slot else prev
             master_array.append([cur.name])
             dims_array.append([cur.width_mm, cur.length_mm,
-                               1 if cur.wood else 0])
+                               1 if cur.station3 else 0])
         try:
             ok_m = self.client.write_rapid_array(
                 self.task, self.module, self.master_symbol, master_array,
@@ -273,5 +263,4 @@ class RobotMasterMonitor:
         except Exception as e:
             log.warning("robot master push failed slot=%d: %s", slot, e)
             return
-        # Update cache so the next poll's compare sees the value as fresh.
         self._last_robot[slot] = new_slot

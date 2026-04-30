@@ -1,26 +1,25 @@
-"""sizes_store.py — SQLite CRUD for size catalogs.
+"""sizes_store.py — SQLite CRUD for the size catalog.
 
-One DB with two tables, `cardboard` and `others`, both with the same shape:
-    id, name, width_mm, length_mm, slot
+Single table `sizes`:
+    id, name, width_mm, length_mm, slot, station3, created_at, updated_at
 
-mm is the canonical unit. The optional `slot` column (0–19, unique across
-both tables) pins a row to a numbered slot in the robot's Master /
-Master_Dimmensions arrays — used by `robot_master.RobotMasterMonitor`
-for the live two-way mirror. NULL slot = local-only, never pushed.
+mm is the canonical unit. The optional `slot` column (0–19, unique) pins
+a row to a numbered position in the robot's Master / Master_Dimmensions
+arrays — used by `robot_master.RobotMasterMonitor` for the live two-way
+mirror. NULL slot = local-only, never pushed.
 
-Wood routing: the *table* a row lives in tells you whether it's wood.
-`others` rows are mirrored to the robot with wood=1, `cardboard` with
-wood=0. Use `upsert_slot()` to insert/update by slot index — it picks
-the right table automatically and moves the row across when the wood
-flag flips.
+`station3` is the boolean encoded in the third column of
+Master_Dimmensions on the controller — 1 means the size is selectable at
+station 3, 0 means it isn't. It rides on each row alongside the
+dimensions; no table routing.
 
 Usage:
     sizes = SizesStore.from_config(cfg.sizes)
     sizes.start()
-    sid = sizes.add("cardboard", Size(name="35x70", width_mm=889, length_mm=1778))
-    s = sizes.get("cardboard", sid)
-    sizes.list("others")
-    sizes.upsert_slot(3, "Wood", 1000, 1000, wood=True)
+    sid = sizes.add(Size(name="35x70", width_mm=889, length_mm=1778))
+    s = sizes.get(sid)
+    sizes.list()
+    sizes.upsert_slot(3, "Wood", 1000, 1000, station3=True)
     sizes.clear_slot(3)
     sizes.stop()
 
@@ -42,46 +41,30 @@ from typing import Callable, Literal
 
 log = logging.getLogger(__name__)
 
-TABLES = ("cardboard", "others")
+TABLE      = "sizes"
 SLOT_COUNT = 20
 
-# Wood routing: which table a wood=true / wood=false row lives in.
-WOOD_TABLE = "others"
-NON_WOOD_TABLE = "cardboard"
-
-# Tables only — indexes are created post-migration so legacy DBs without the
-# `slot` column don't trip the index DDL during executescript().
-_SCHEMA_TABLES = """
-CREATE TABLE IF NOT EXISTS cardboard (
+_SCHEMA_TABLE = """
+CREATE TABLE IF NOT EXISTS sizes (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT    NOT NULL,
     width_mm   INTEGER NOT NULL,
     length_mm  INTEGER NOT NULL,
     slot       INTEGER,
-    created_at TEXT    NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT
-);
-CREATE TABLE IF NOT EXISTS others (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    name       TEXT    NOT NULL,
-    width_mm   INTEGER NOT NULL,
-    length_mm  INTEGER NOT NULL,
-    slot       INTEGER,
+    station3   INTEGER NOT NULL DEFAULT 0,
     created_at TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT
 );
 """
 
 _SCHEMA_INDEXES = """
-CREATE UNIQUE INDEX IF NOT EXISTS idx_cardboard_slot ON cardboard(slot)
-    WHERE slot IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_others_slot    ON others(slot)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sizes_slot ON sizes(slot)
     WHERE slot IS NOT NULL;
 """
 
 # Columns the dataclass round-trips. Excludes id (autoincrement) and
 # timestamps (auto-managed).
-_COLS = ("name", "width_mm", "length_mm", "slot")
+_COLS = ("name", "width_mm", "length_mm", "slot", "station3")
 
 
 @dataclass(frozen=True)
@@ -94,13 +77,13 @@ class Size:
     name:      str
     width_mm:  int
     length_mm: int
-    slot:      int | None = None
-    id:        int | None = None       # None until persisted
+    slot:      int  | None = None
+    station3:  bool = False
+    id:        int  | None = None       # None until persisted
 
 
 @dataclass(frozen=True)
 class SizesChange:
-    table: str                                  # "cardboard" | "others"
     op:    Literal["add", "update", "delete"]
     size:  Size | None                          # None on delete
     sid:   int                                  # row id (post-insert / pre-delete)
@@ -113,27 +96,19 @@ def _row_to_size(row: sqlite3.Row) -> Size:
         width_mm  = int(row["width_mm"]),
         length_mm = int(row["length_mm"]),
         slot      = (None if row["slot"] is None else int(row["slot"])),
+        station3  = bool(row["station3"]),
     )
 
 
-def table_for_wood(wood: bool) -> str:
-    """Routing rule: wood → others, non-wood → cardboard."""
-    return WOOD_TABLE if wood else NON_WOOD_TABLE
-
-
-def is_wood_table(table: str) -> bool:
-    return table == WOOD_TABLE
-
-
 class SizesStore:
-    """SQLite-backed size catalog (cardboard + others). Thread-safe via lock."""
+    """SQLite-backed size catalog. Thread-safe via lock."""
 
     def __init__(self, cfg: SizesConfig):
         self.cfg = cfg
         self._conn: sqlite3.Connection | None = None
         self._lock = threading.Lock()
         self._cbs: list[Callable[[SizesChange], None]] = []
-        self._silent = False     # set during sync writes to suppress callbacks
+        self._silent = False
 
     @classmethod
     def from_config(cls, cfg: SizesConfig) -> "SizesStore":
@@ -146,7 +121,7 @@ class SizesStore:
         self._conn = sqlite3.connect(self.cfg.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         with self._lock:
-            self._conn.executescript(_SCHEMA_TABLES)
+            self._conn.executescript(_SCHEMA_TABLE)
             self._migrate(self._conn)
             self._conn.executescript(_SCHEMA_INDEXES)
             self._conn.commit()
@@ -157,7 +132,7 @@ class SizesStore:
             except Exception: pass
             self._conn = None
 
-    # ---- subscriptions -----------------------------------------------------
+    # ---- subscriptions ------------------------------------------------------
 
     def on_change(
         self, cb: Callable[[SizesChange], None],
@@ -188,52 +163,48 @@ class SizesStore:
 
     # ---- public CRUD --------------------------------------------------------
 
-    def list(self, table: str) -> list[Size]:
-        t = self._table(table)
+    def list(self) -> list[Size]:
         with self._lock:
             rows = self._require_conn().execute(
-                f"SELECT * FROM {t} ORDER BY id ASC"
+                f"SELECT * FROM {TABLE} ORDER BY id ASC"
             ).fetchall()
         return [_row_to_size(r) for r in rows]
 
-    def get(self, table: str, sid: int) -> Size | None:
-        t = self._table(table)
+    def get(self, sid: int) -> Size | None:
         with self._lock:
             row = self._require_conn().execute(
-                f"SELECT * FROM {t} WHERE id = ?", (int(sid),)
+                f"SELECT * FROM {TABLE} WHERE id = ?", (int(sid),),
             ).fetchone()
         return _row_to_size(row) if row else None
 
-    def add(self, table: str, s: Size) -> int:
+    def add(self, s: Size) -> int:
         """Insert a new row. Returns the assigned id (s.id is ignored)."""
-        t = self._table(table)
         if s.slot is not None:
             self._guard_slot(s.slot, exclude=None)
         d = self._payload(s)
         cols         = ", ".join(_COLS)
         placeholders = ", ".join(f":{c}" for c in _COLS)
-        sql = f"INSERT INTO {t} ({cols}) VALUES ({placeholders})"
+        sql = f"INSERT INTO {TABLE} ({cols}) VALUES ({placeholders})"
         with self._lock:
             conn = self._require_conn()
             cur  = conn.execute(sql, d)
             conn.commit()
             new_id = int(cur.lastrowid)
         s2 = Size(**{**asdict(s), "id": new_id})
-        self._emit(SizesChange(table=t, op="add", size=s2, sid=new_id))
+        self._emit(SizesChange(op="add", size=s2, sid=new_id))
         return new_id
 
-    def update(self, table: str, s: Size) -> None:
+    def update(self, s: Size) -> None:
         """Update by id. Bumps updated_at. Raises if s.id is None or missing."""
         if s.id is None:
             raise ValueError("update() requires Size.id")
-        t = self._table(table)
         if s.slot is not None:
-            self._guard_slot(s.slot, exclude=(t, int(s.id)))
+            self._guard_slot(s.slot, exclude=int(s.id))
         d = self._payload(s)
         d["id"] = int(s.id)
         set_clause = ", ".join(f"{c} = :{c}" for c in _COLS)
         sql = (
-            f"UPDATE {t} SET {set_clause}, updated_at = datetime('now') "
+            f"UPDATE {TABLE} SET {set_clause}, updated_at = datetime('now') "
             f"WHERE id = :id"
         )
         with self._lock:
@@ -241,145 +212,134 @@ class SizesStore:
             cur  = conn.execute(sql, d)
             conn.commit()
             if cur.rowcount == 0:
-                raise KeyError(f"no row with id={s.id} in {t}")
-        self._emit(SizesChange(table=t, op="update", size=s, sid=int(s.id)))
+                raise KeyError(f"no row with id={s.id}")
+        self._emit(SizesChange(op="update", size=s, sid=int(s.id)))
 
-    def delete(self, table: str, sid: int) -> None:
+    def delete(self, sid: int) -> None:
         """Hard delete. (No soft-delete here — sizes are reference data.)"""
-        t = self._table(table)
         with self._lock:
             conn = self._require_conn()
-            conn.execute(f"DELETE FROM {t} WHERE id = ?", (int(sid),))
+            conn.execute(f"DELETE FROM {TABLE} WHERE id = ?", (int(sid),))
             conn.commit()
-        self._emit(SizesChange(table=t, op="delete", size=None, sid=int(sid)))
+        self._emit(SizesChange(op="delete", size=None, sid=int(sid)))
 
-    # ---- slot-aware helpers ------------------------------------------------
+    # ---- slot-aware helpers -------------------------------------------------
 
-    def get_slot(self, slot: int) -> tuple[str, Size] | None:
-        """Locate the row pinned to `slot` in either table."""
+    def get_slot(self, slot: int) -> Size | None:
+        """Return the row pinned to `slot`, if any."""
         with self._lock:
-            conn = self._require_conn()
-            for t in TABLES:
-                row = conn.execute(
-                    f"SELECT * FROM {t} WHERE slot = ?", (int(slot),),
-                ).fetchone()
-                if row is not None:
-                    return t, _row_to_size(row)
-        return None
+            row = self._require_conn().execute(
+                f"SELECT * FROM {TABLE} WHERE slot = ?", (int(slot),),
+            ).fetchone()
+        return _row_to_size(row) if row else None
 
     def upsert_slot(
         self, slot: int, name: str,
-        width_mm: int, length_mm: int, *, wood: bool,
-    ) -> tuple[str, int]:
-        """Idempotent: ensure the slot holds (name, w, l) in the wood-routed table.
+        width_mm: int, length_mm: int, *, station3: bool,
+    ) -> int:
+        """Idempotent: ensure the slot holds the given (name, w, l, station3).
 
-        Cross-table moves (wood flag flipped) are handled by deleting from
-        the wrong table and inserting in the right one — both events fire
-        via on_change.
-
-        Returns (table, sid) of the resulting row.
+        Returns the row's sid. No on_change emit on a no-op.
         """
-        target  = table_for_wood(wood)
+        size = Size(
+            name=name, width_mm=int(width_mm), length_mm=int(length_mm),
+            slot=int(slot), station3=bool(station3),
+        )
         current = self.get_slot(slot)
-        size = Size(name=name, width_mm=int(width_mm),
-                    length_mm=int(length_mm), slot=int(slot))
         if current is None:
-            sid = self.add(target, size)
-            return target, sid
-        cur_table, cur_size = current
-        if cur_table != target:
-            # Wood flag changed — move the row.
-            self.delete(cur_table, cur_size.id)        # type: ignore[arg-type]
-            sid = self.add(target, size)
-            return target, sid
-        # Same table — update in place if anything changed.
-        if (cur_size.name == size.name
-                and cur_size.width_mm == size.width_mm
-                and cur_size.length_mm == size.length_mm):
-            return cur_table, cur_size.id              # type: ignore[return-value]
-        size.id = cur_size.id
-        self.update(cur_table, size)
-        return cur_table, cur_size.id                  # type: ignore[return-value]
+            return self.add(size)
+        if (current.name      == size.name
+                and current.width_mm  == size.width_mm
+                and current.length_mm == size.length_mm
+                and current.station3  == size.station3):
+            return int(current.id)                          # type: ignore[arg-type]
+        size.id = current.id
+        self.update(size)
+        return int(current.id)                              # type: ignore[arg-type]
 
     def clear_slot(self, slot: int) -> bool:
-        """Remove whichever row (if any) is pinned to `slot`. Returns True if deleted."""
+        """Remove the row pinned to `slot`. Returns True if deleted."""
         current = self.get_slot(slot)
         if current is None:
             return False
-        table, size = current
-        self.delete(table, int(size.id))               # type: ignore[arg-type]
+        self.delete(int(current.id))                        # type: ignore[arg-type]
         return True
 
     # ---- internals ----------------------------------------------------------
 
-    def _guard_slot(
-        self, slot: int, *, exclude: tuple[str, int] | None,
-    ) -> None:
-        """Raise if `slot` is already used by another row in either table."""
+    def _guard_slot(self, slot: int, *, exclude: int | None) -> None:
+        """Raise if `slot` is already used by another row."""
         if not (0 <= int(slot) < SLOT_COUNT):
             raise ValueError(
                 f"slot {slot} out of range 0..{SLOT_COUNT - 1}"
             )
         with self._lock:
-            conn = self._require_conn()
-            for t in TABLES:
-                row = conn.execute(
-                    f"SELECT id FROM {t} WHERE slot = ?", (int(slot),),
-                ).fetchone()
-                if row is None:
-                    continue
-                if exclude is not None and exclude == (t, int(row["id"])):
-                    continue
-                raise ValueError(
-                    f"slot {slot} already used by {t}#{row['id']}"
-                )
+            row = self._require_conn().execute(
+                f"SELECT id FROM {TABLE} WHERE slot = ?", (int(slot),),
+            ).fetchone()
+        if row is None:
+            return
+        if exclude is not None and int(row["id"]) == exclude:
+            return
+        raise ValueError(f"slot {slot} already used by sizes#{row['id']}")
 
     @staticmethod
     def _migrate(conn: sqlite3.Connection) -> None:
-        """Drop obsolete columns + add new ones. Idempotent."""
-        # Old: width_in / length_in NOT NULL — drop them.
-        OBSOLETE = ("width_in", "length_in")
-        # New: slot column for the robot mirror.
-        TO_ADD = (
-            ("slot", "INTEGER"),
-        )
-        for table in TABLES:
-            cols = {r["name"] for r in conn.execute(
-                f"PRAGMA table_info({table})"
-            )}
-            for col in OBSOLETE:
-                if col in cols:
-                    try:
-                        conn.execute(f"ALTER TABLE {table} DROP COLUMN {col}")
-                        log.info("sizes: dropped obsolete column %s.%s", table, col)
-                    except sqlite3.OperationalError as e:
-                        log.warning(
-                            "sizes: could not drop %s.%s (%s) — delete the "
-                            "DB file or upgrade SQLite to 3.35+",
-                            table, col, e,
-                        )
-            for col, decl in TO_ADD:
-                if col not in cols:
-                    try:
-                        conn.execute(
-                            f"ALTER TABLE {table} ADD COLUMN {col} {decl}"
-                        )
-                        log.info("sizes: added column %s.%s", table, col)
-                    except sqlite3.OperationalError as e:
-                        log.warning(
-                            "sizes: could not add %s.%s: %s", table, col, e,
-                        )
+        """One-shot folds: cardboard + others → sizes (with station3 set
+        from which legacy table the row came from), then drops the legacy
+        tables. Idempotent: re-runs are no-ops once the legacy tables are
+        gone.
+        """
+        existing = {r["name"] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
 
-    @staticmethod
-    def _table(table: str) -> str:
-        if table not in TABLES:
-            raise ValueError(f"unknown table {table!r}; expected one of {TABLES}")
-        return table
+        # Legacy tables to fold into `sizes`. station3 default is what
+        # the user's earlier wood-routing implied: rows from `others`
+        # had wood=1, so station3=1.
+        for legacy_table, station3 in (("cardboard", 0), ("others", 1)):
+            if legacy_table not in existing:
+                continue
+            cols = {r["name"] for r in conn.execute(
+                f"PRAGMA table_info({legacy_table})"
+            )}
+            common = [c for c in ("name", "width_mm", "length_mm", "slot")
+                      if c in cols]
+            if not common:
+                conn.execute(f"DROP TABLE {legacy_table}")
+                log.info("sizes: dropped legacy table %s (no usable columns)",
+                         legacy_table)
+                continue
+            placeholders = ", ".join(common)
+            conn.execute(
+                f"INSERT INTO sizes ({placeholders}, station3) "
+                f"SELECT {placeholders}, {station3} FROM {legacy_table}"
+            )
+            conn.execute(f"DROP TABLE {legacy_table}")
+            log.info(
+                "sizes: folded %s rows from %s (station3=%d) into sizes",
+                conn.total_changes, legacy_table, station3,
+            )
+
+        # Make sure the `station3` column exists on a pre-existing `sizes`
+        # table (e.g. user already migrated then we added the column).
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(sizes)")}
+        if "station3" not in cols:
+            try:
+                conn.execute(
+                    "ALTER TABLE sizes ADD COLUMN station3 INTEGER "
+                    "NOT NULL DEFAULT 0"
+                )
+                log.info("sizes: added column sizes.station3")
+            except sqlite3.OperationalError as e:
+                log.warning("sizes: could not add station3: %s", e)
 
     @staticmethod
     def _payload(s: Size) -> dict:
         d = asdict(s)
         d.pop("id", None)
+        # SQLite stores bools as 0/1 INTs.
+        d["station3"] = 1 if d.get("station3") else 0
         return d
 
     def _require_conn(self) -> sqlite3.Connection:

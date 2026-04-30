@@ -1,11 +1,11 @@
 """sizes_publisher.py — bridge active size ids from the PLC to setpoints.
 
-For each configured (table, code_alias, setpoints_alias) mapping:
-    PLC writes nId → Python looks up sizes.get(table, nId) → Python writes
-    the matching ST_SizeSetpoints struct.
+For each configured (code_alias, setpoints_alias) mapping:
+    PLC writes nId → Python looks up sizes.get(nId) → Python writes the
+    matching ST_SizeSetpoints struct.
 
-One instance handles N mappings (typically one per table — cardboard and
-others). Mirrors RecipePublisher in spirit but is multi-table.
+One instance handles N mappings (typically one per active-selector the
+PLC owns, e.g. one per station). Mirrors RecipePublisher in spirit.
 
 Threading: notifications run on pyads's AmsRouter thread; making sync ADS
 writes from there deadlocks (response handler == caller). So the
@@ -19,7 +19,7 @@ import queue
 import threading
 from dataclasses import dataclass
 
-from sizes_store import Size, SizesStore
+from sizes_store  import Size, SizesStore
 from twincat_comm import TwinCATComm
 
 log = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class SizeSetpointConfig:
-    table:           str   # "cardboard" or "others"
+    name:            str   # human label used in logs ("station3", "main", …)
     code_alias:      str   # PLC writes a DINT here
     setpoints_alias: str   # Python writes ST_SizeSetpoints here
     cycle_ms:        int = 100
@@ -50,7 +50,7 @@ _STOP = object()
 
 
 class SizesPublisher:
-    """N PLC subscriptions → sizes.get(table, id) → struct write.
+    """N PLC subscriptions → sizes.get(id) → struct write.
 
     Writes happen on a worker thread, never on pyads's notification thread.
     """
@@ -75,7 +75,6 @@ class SizesPublisher:
             aliases += [m.code_alias, m.setpoints_alias]
         self.plc.validate(aliases)
 
-        # Worker first so initial enqueues have a consumer.
         self._stop_evt.clear()
         self._worker = threading.Thread(
             target=self._run, daemon=True, name="sizes-pub-writer",
@@ -87,7 +86,7 @@ class SizesPublisher:
                 current = self.plc.read(m.code_alias)
                 self._queue.put((m, int(current)))
             except Exception as e:
-                log.warning("initial %s size read failed: %s", m.table, e)
+                log.warning("initial %s size read failed: %s", m.name, e)
 
             try:
                 handles = self.plc.subscribe(
@@ -101,17 +100,15 @@ class SizesPublisher:
                 log.warning(
                     "%s size subscription failed (%s); disabled until "
                     "'%s' is available on the PLC",
-                    m.table, e, m.code_alias,
+                    m.name, e, m.code_alias,
                 )
 
     def stop(self) -> None:
-        # Unsubscribe first so no new items get enqueued.
         for h in self._handles:
             try: self.plc.unsubscribe(h)
             except Exception as e: log.warning("unsubscribe size failed: %s", e)
         self._handles.clear()
 
-        # Wake the worker and join.
         self._stop_evt.set()
         self._queue.put(_STOP)
         if self._worker is not None:
@@ -133,21 +130,21 @@ class SizesPublisher:
                 self._apply(m, sid)
             except Exception:
                 log.exception("sizes writer crashed on (%s, %s)",
-                              getattr(m, "table", "?"), sid)
+                              getattr(m, "name", "?"), sid)
 
     def _apply(self, m: SizeSetpointConfig, sid: int) -> None:
         if sid <= 0:
             # 0 means "no selection" (autoincrement starts at 1). Don't warn.
             return
-        size = self.sizes.get(m.table, sid)
+        size = self.sizes.get(sid)
         if size is None:
             log.warning(
                 "%s size id %s not found in DB — no setpoints written",
-                m.table, sid,
+                m.name, sid,
             )
             return
         try:
             self.plc.write(m.setpoints_alias, _size_to_struct(size))
-            log.info("%s size %s pushed (%s)", m.table, sid, size.name)
+            log.info("%s size %s pushed (%s)", m.name, sid, size.name)
         except Exception as e:
-            log.warning("%s size setpoints write failed: %s", m.table, e)
+            log.warning("%s size setpoints write failed: %s", m.name, e)

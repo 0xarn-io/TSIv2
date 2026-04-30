@@ -1,4 +1,4 @@
-"""Tests for SizesPublisher — multi-table subscribe → DB lookup → struct write.
+"""Tests for SizesPublisher — N×(subscribe → DB lookup → struct write).
 
 Writes run on a worker thread; tests block until the queue drains before
 asserting on plc.write side effects.
@@ -34,12 +34,12 @@ def _size(**overrides) -> Size:
 
 def _mappings() -> list[SizeSetpointConfig]:
     return [
-        SizeSetpointConfig(table="cardboard",
-                            code_alias="size.cardboard_id",
-                            setpoints_alias="size.cardboard_setpoints"),
-        SizeSetpointConfig(table="others",
-                            code_alias="size.others_id",
-                            setpoints_alias="size.others_setpoints"),
+        SizeSetpointConfig(name="main",
+                            code_alias="size.main_id",
+                            setpoints_alias="size.main_setpoints"),
+        SizeSetpointConfig(name="station3",
+                            code_alias="size.station3_id",
+                            setpoints_alias="size.station3_setpoints"),
     ]
 
 
@@ -67,31 +67,31 @@ def test_start_validates_all_aliases():
     pub.start()
     try:
         plc.validate.assert_called_once_with([
-            "size.cardboard_id", "size.cardboard_setpoints",
-            "size.others_id",    "size.others_setpoints",
+            "size.main_id",     "size.main_setpoints",
+            "size.station3_id", "size.station3_setpoints",
         ])
     finally:
         pub.stop()
 
 
-def test_start_pushes_initial_for_each_table():
+def test_start_pushes_initial_for_each_mapping():
     pub, sizes, plc = _make(initial={
-        "size.cardboard_id": 7,
-        "size.others_id":    3,
+        "size.main_id":     7,
+        "size.station3_id": 3,
     })
-    sizes.get.side_effect = lambda table, sid: {
-        ("cardboard", 7): _size(name="C7", width_mm=999),
-        ("others",    3): _size(name="O3", length_mm=888),
-    }[(table, sid)]
+    sizes.get.side_effect = lambda sid: {
+        7: _size(name="C7", width_mm=999),
+        3: _size(name="O3", length_mm=888),
+    }[sid]
 
     pub.start()
     try:
         _drain(pub)
-        sizes.get.assert_any_call("cardboard", 7)
-        sizes.get.assert_any_call("others",    3)
+        sizes.get.assert_any_call(7)
+        sizes.get.assert_any_call(3)
         written = {c.args[0]: c.args[1] for c in plc.write.call_args_list}
-        assert written["size.cardboard_setpoints"]["nWidthMm"]  == 999
-        assert written["size.others_setpoints"]["nLengthMm"] == 888
+        assert written["size.main_setpoints"]["nWidthMm"]      == 999
+        assert written["size.station3_setpoints"]["nLengthMm"] == 888
     finally:
         pub.stop()
 
@@ -109,7 +109,7 @@ def test_start_skips_id_zero_silently():
 
 
 def test_start_handles_unknown_id(caplog):
-    pub, sizes, plc = _make(initial={"size.cardboard_id": 42})
+    pub, sizes, plc = _make(initial={"size.main_id": 42})
     sizes.get.return_value = None
 
     import logging
@@ -121,7 +121,7 @@ def test_start_handles_unknown_id(caplog):
             pub.stop()
 
     plc.write.assert_not_called()
-    assert any("cardboard size id 42 not found" in r.message
+    assert any("main size id 42 not found" in r.message
                for r in caplog.records)
 
 
@@ -138,8 +138,8 @@ def test_start_handles_initial_read_failure(caplog):
             pub.stop()
 
     msgs = [r.message for r in caplog.records]
-    assert any("initial cardboard size read failed" in m for m in msgs)
-    assert any("initial others size read failed"    in m for m in msgs)
+    assert any("initial main size read failed"     in m for m in msgs)
+    assert any("initial station3 size read failed" in m for m in msgs)
 
 
 def test_start_handles_subscription_failure(caplog):
@@ -156,14 +156,14 @@ def test_start_handles_subscription_failure(caplog):
             pub.stop()
 
     msgs = [r.message for r in caplog.records]
-    assert any("cardboard size subscription failed" in m for m in msgs)
-    assert any("others size subscription failed"    in m for m in msgs)
+    assert any("main size subscription failed"     in m for m in msgs)
+    assert any("station3 size subscription failed" in m for m in msgs)
 
 
 # ---- runtime callback --------------------------------------------------------
 
-def test_callback_writes_correct_table_struct():
-    """Each PLC notification must look up in the matching table and write."""
+def test_callback_writes_correct_struct():
+    """Each PLC notification must look up the size and write its struct."""
     pub, sizes, plc = _make()
     captured: dict[str, callable] = {}
     def fake_subscribe(alias, cb, **_):
@@ -177,20 +177,20 @@ def test_callback_writes_correct_table_struct():
         plc.reset_mock()
         sizes.get.return_value = _size(name="X", width_mm=500, length_mm=700)
 
-        captured["size.cardboard_id"]("size.cardboard_id", 5)
+        captured["size.main_id"]("size.main_id", 5)
         _drain(pub)
-        sizes.get.assert_called_with("cardboard", 5)
+        sizes.get.assert_called_with(5)
         alias, struct = plc.write.call_args.args
-        assert alias == "size.cardboard_setpoints"
+        assert alias == "size.main_setpoints"
         assert struct["nWidthMm"]  == 500
         assert struct["nLengthMm"] == 700
 
         plc.reset_mock()
-        captured["size.others_id"]("size.others_id", 9)
+        captured["size.station3_id"]("size.station3_id", 9)
         _drain(pub)
-        sizes.get.assert_called_with("others", 9)
+        sizes.get.assert_called_with(9)
         alias, _ = plc.write.call_args.args
-        assert alias == "size.others_setpoints"
+        assert alias == "size.station3_setpoints"
     finally:
         pub.stop()
 
@@ -209,11 +209,11 @@ def test_callback_unknown_id_warns(caplog):
 
         import logging
         with caplog.at_level(logging.WARNING, logger="sizes_publisher"):
-            captured["size.others_id"]("size.others_id", 999)
+            captured["size.station3_id"]("size.station3_id", 999)
             _drain(pub)
 
         plc.write.assert_not_called()
-        assert any("others size id 999 not found" in r.message for r in caplog.records)
+        assert any("station3 size id 999 not found" in r.message for r in caplog.records)
     finally:
         pub.stop()
 
@@ -228,7 +228,7 @@ def test_callback_write_failure_swallowed():
     try:
         sizes.get.return_value = _size()
         plc.write.side_effect = RuntimeError("ADS gone")
-        captured["size.cardboard_id"]("size.cardboard_id", 1)    # must not raise
+        captured["size.main_id"]("size.main_id", 1)    # must not raise
         _drain(pub)
         # Worker must survive a write failure.
         assert pub._worker is not None and pub._worker.is_alive()

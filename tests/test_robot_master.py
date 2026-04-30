@@ -43,19 +43,19 @@ def test_inbound_imports_non_empty_slots(tmp_path: Path):
     try:
         m._poll_once()
 
-        # Slot 0 → cardboard ("35x70", wood=0)
-        cb = sizes.list("cardboard")
-        names_cb = {r.name: r for r in cb}
-        assert "35x70" in names_cb
-        assert names_cb["35x70"].slot == 0
-        assert names_cb["35x70"].width_mm == 889
-        # Slot 2 → others ("Wood", wood=1)
-        oth = sizes.list("others")
-        names_oth = {r.name: r for r in oth}
-        assert "Wood" in names_oth
-        assert names_oth["Wood"].slot == 2
-        # Slot 3 → cardboard ("test", wood=0)
-        assert "test" in names_cb
+        rows = {r.name: r for r in sizes.list()}
+        # Slot 0 → "35x70", station3=False
+        assert "35x70" in rows
+        assert rows["35x70"].slot     == 0
+        assert rows["35x70"].width_mm == 889
+        assert rows["35x70"].station3 is False
+        # Slot 2 → "Wood", station3=True
+        assert "Wood" in rows
+        assert rows["Wood"].slot     == 2
+        assert rows["Wood"].station3 is True
+        # Slot 3 → "test", station3=False
+        assert "test" in rows
+        assert rows["test"].station3 is False
     finally:
         sizes.stop()
 
@@ -71,9 +71,9 @@ def test_inbound_skip_unchanged_slots(tmp_path: Path):
         m._poll_once()
         # Mirror runs in silent mode → events stay empty.
         assert events == []
-        first_count = len(sizes.list("cardboard"))
+        first_count = len(sizes.list())
         m._poll_once()                                # same data
-        assert len(sizes.list("cardboard")) == first_count
+        assert len(sizes.list()) == first_count
     finally:
         sizes.stop()
 
@@ -96,23 +96,23 @@ def test_inbound_clears_slot_when_robot_empties(tmp_path: Path):
         sizes.stop()
 
 
-def test_inbound_moves_row_when_wood_flag_flips(tmp_path: Path):
+def test_inbound_updates_station3_flag(tmp_path: Path):
     m, client, sizes = _make(tmp_path,
         master=[["X"]] + [[""]] * 19,
         dims  =[[100, 200, 0]] + [[0, 0, 0]] * 19,
     )
     try:
         m._poll_once()
-        assert sizes.get_slot(0)[0] == "cardboard"
-        # Robot flips wood=1.
+        got = sizes.get_slot(0)
+        assert got is not None and got.station3 is False
+        # Robot flips station3=1.
         client.read_rapid_array_by_index.side_effect = lambda task, mod, sym, count: (
             [["X"]] + [[""]] * 19 if sym == "Master"
             else [[100, 200, 1]] + [[0, 0, 0]] * 19
         )
         m._poll_once()
-        assert sizes.get_slot(0)[0] == "others"
-        # Cardboard table no longer holds slot 0.
-        assert all(r.slot != 0 for r in sizes.list("cardboard"))
+        got = sizes.get_slot(0)
+        assert got is not None and got.station3 is True
     finally:
         sizes.stop()
 
@@ -147,10 +147,9 @@ def test_db_add_pushes_to_robot(tmp_path: Path):
         client.write_rapid_array.reset_mock()
         m._unsub_db = sizes.on_change(m._on_db_change)
 
-        sizes.add("cardboard", Size(name="A", width_mm=100, length_mm=200, slot=5))
+        sizes.add(Size(name="A", width_mm=100, length_mm=200, slot=5))
 
         assert client.write_rapid_array.call_count == 2  # master + dims
-        # Master array contains "A" at slot 5.
         master_call = next(
             c for c in client.write_rapid_array.call_args_list
             if c.args[2] == "Master"
@@ -172,11 +171,10 @@ def test_db_delete_clears_robot_slot(tmp_path: Path):
     try:
         m._poll_once()
         m._unsub_db = sizes.on_change(m._on_db_change)
-        sid = sizes.add("cardboard",
-                        Size(name="A", width_mm=100, length_mm=200, slot=2))
+        sid = sizes.add(Size(name="A", width_mm=100, length_mm=200, slot=2))
         client.write_rapid_array.reset_mock()
 
-        sizes.delete("cardboard", sid)
+        sizes.delete(sid)
 
         # The reconcile loop pushes new arrays where slot 2 is cleared.
         master_call = next(
@@ -193,16 +191,15 @@ def test_db_delete_clears_robot_slot(tmp_path: Path):
         sizes.stop()
 
 
-def test_db_update_to_other_table_pushes_correct_wood_flag(tmp_path: Path):
+def test_db_upsert_pushes_correct_station3_flag(tmp_path: Path):
     m, client, sizes = _make(tmp_path,
         master=[[""]] * 20, dims=[[0, 0, 0]] * 20,
     )
     try:
         m._poll_once()
         m._unsub_db = sizes.on_change(m._on_db_change)
-        # upsert with wood=true → row lands in others, robot row should
-        # have wood flag = 1.
-        sizes.upsert_slot(7, "Wood", 1000, 1000, wood=True)
+        # upsert with station3=True → robot row should have flag = 1.
+        sizes.upsert_slot(7, "Wood", 1000, 1000, station3=True)
         dims_call = next(
             c for c in client.write_rapid_array.call_args_list
             if c.args[2] == "Master_Dimmensions"
@@ -223,7 +220,7 @@ def test_outbound_skips_when_value_unchanged(tmp_path: Path):
         client.write_rapid_array.reset_mock()
         # DB now contains the row from inbound. Re-upsert with identical
         # values: SizesStore returns no-op, no on_change emit, no push.
-        sizes.upsert_slot(0, "A", 1, 2, wood=False)
+        sizes.upsert_slot(0, "A", 1, 2, station3=False)
         client.write_rapid_array.assert_not_called()
     finally:
         sizes.stop()
