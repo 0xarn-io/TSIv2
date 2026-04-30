@@ -110,10 +110,15 @@ class CameraPanel:
                 ok = True
             else:
                 self._status.text = f"Capture failed ({source})"
-                ui.notify(
-                    f"{self.config.name.capitalize()} camera capture failed",
-                    type="negative",
-                )
+                # ui.notify can raise if the parent slot was deleted
+                # (e.g. page was closed while a trigger was in flight).
+                try:
+                    ui.notify(
+                        f"{self.config.name.capitalize()} camera capture failed",
+                        type="negative",
+                    )
+                except Exception as e:
+                    log.debug("camera notify skipped (slot gone): %s", e)
         finally:
             self._busy = False
             for cb in list(self._done_cbs):
