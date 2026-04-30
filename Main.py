@@ -120,6 +120,11 @@ dashboard.register_routes()
 
 @app.on_startup
 def _startup() -> None:
+    # Cameras need the running asyncio loop so PLC callbacks (on the
+    # AmsRouter thread) can schedule snapshots cross-thread. on_startup
+    # runs inside the NiceGUI loop, so get_event_loop() returns it.
+    import asyncio
+    cameras.attach_loop(asyncio.get_event_loop())
     plc.open()
     if archive:    archive.start()        # one-shot prune
     bridge.start()
