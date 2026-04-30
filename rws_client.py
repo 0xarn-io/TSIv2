@@ -33,6 +33,10 @@ class RWSClient:
         # decoupled — only attribute access is used).
         self.cfg = cfg
         self._session = self._make_session()
+        # Resolved RWS URL per (task, module, symbol). Filled by read_rapid
+        # on the first successful read; reused on subsequent calls so we
+        # don't re-probe every variant on every poll.
+        self._rapid_path_cache: dict[tuple[str, str, str], str] = {}
 
     # ---- HTTP primitives ----------------------------------------------------
 
@@ -42,14 +46,7 @@ class RWSClient:
         s = requests.Session()
         s.auth   = HTTPBasicAuth(self.cfg.username, self.cfg.password)
         s.verify = self.cfg.verify_ssl
-        # Accept hal+json regardless of RWS version — some endpoints (e.g.
-        # /rw/rapid/tasks) refuse the v=2.0 pin even on OmniCore. Listing
-        # the variants lets the server pick whatever it can render.
-        s.headers.update({"Accept": (
-            "application/hal+json;v=2.0, "
-            "application/hal+json;v=1.0, "
-            "application/hal+json"
-        )})
+        s.headers.update({"Accept": "application/hal+json;v=2.0"})
         return s
 
     def _url(self, path: str) -> str:
@@ -115,17 +112,41 @@ class RWSClient:
     ) -> Optional[str]:
         """Read a RAPID symbol's raw value string. Returns None on failure.
 
-        Tries the OmniCore `;value` subresource form first (where the data
-        for symbol is exposed) then falls back to the bare path.
+        OmniCore RWS uses different paths than IRC5 / older controllers,
+        and the right one varies by firmware. Try the common forms in
+        order and cache the winner per-symbol so we don't keep hammering
+        dead URLs every poll.
         """
-        base = self._rapid_path(task, module, symbol)
-        obj = self.get_first(
-            base + ";value",
-            base,
+        cache_key = (task, module, symbol)
+        cached = self._rapid_path_cache.get(cache_key)
+        if cached is not None:
+            obj = self.get(cached)
+            return _extract_rapid_value(obj) if obj else None
+
+        candidates = (
+            self._rapid_path(task, module, symbol) + ";value",
+            self._rapid_path(task, module, symbol),
+            # URL-encoded slashes — some firmwares treat the symbol URI as
+            # a single opaque resource id rather than a sub-tree.
+            f"/rw/rapid/symbol/data/RAPID%2F{task}%2F{module}%2F{symbol};value",
+            f"/rw/rapid/symbol/data/RAPID%2F{task}%2F{module}%2F{symbol}",
+            # IRC5 / RWS 1.0 form.
+            self._rapid_path(task, module, symbol) + "?action=show",
         )
-        if obj is None:
-            return None
-        return _extract_rapid_value(obj)
+        for path in candidates:
+            obj = self.get(path, silent=True)
+            if obj is None:
+                continue
+            self._rapid_path_cache[cache_key] = path
+            log.info("RAPID symbol %s/%s/%s resolved at %s",
+                     task, module, symbol, path)
+            return _extract_rapid_value(obj)
+        log.warning(
+            "RAPID symbol %s/%s/%s not reachable via any RWS URL form "
+            "(tried %d variants)",
+            task, module, symbol, len(candidates),
+        )
+        return None
 
     def write_rapid(
         self, task: str, module: str, symbol: str, value: str,
