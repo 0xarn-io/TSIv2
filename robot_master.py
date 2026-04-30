@@ -126,12 +126,16 @@ class RobotMasterMonitor:
             return
         if slots is None:
             return
+        changed = 0
         for i, slot in enumerate(slots):
             prev = self._last_robot[i]
             if slot == prev:
                 continue
             self._apply_inbound(i, slot)
             self._last_robot[i] = slot
+            changed += 1
+        if changed:
+            log.info("robot master: %d slot(s) synced from controller", changed)
 
     def _read_robot(self) -> list[_Slot] | None:
         master = self.client.read_rapid_array(
@@ -140,8 +144,15 @@ class RobotMasterMonitor:
         dims = self.client.read_rapid_array(
             self.task, self.module, self.dims_symbol,
         )
-        if master is None or dims is None:
+        if master is None:
+            log.warning("robot master: %s/%s/%s read returned None",
+                        self.task, self.module, self.master_symbol)
             return None
+        if dims is None:
+            log.warning("robot master: %s/%s/%s read returned None",
+                        self.task, self.module, self.dims_symbol)
+            return None
+        log.debug("robot master raw: master=%s dims=%s", master, dims)
         slots: list[_Slot] = []
         for i in range(SLOT_COUNT):
             try:
