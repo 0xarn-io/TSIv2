@@ -87,6 +87,15 @@ elog_domain       = 0
 elog_limit        = 50
 elog_include_info = false
 
+# Mirror the Master / Master_Dimmensions RAPID arrays into the sizes DB.
+# Set master_poll_ms = 0 to disable. The wood flag (3rd col of
+# Master_Dimmensions) routes the row: 1 → others, 0 → cardboard.
+master_poll_ms     = 2000
+master_task        = "T_ROB1"
+master_module      = "MainModule"
+master_symbol      = "Master"
+master_dims_symbol = "Master_Dimmensions"
+
 # Optional: declare RAPID symbols to read (and optionally write) via RWS.
 # Each entry is polled at its own poll_ms; values are routed to the listed
 # targets ("ui" = shown in the Vars tab, "log" = appended to errors_log,

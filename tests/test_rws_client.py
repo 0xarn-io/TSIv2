@@ -111,3 +111,62 @@ def test_write_rapid_aborts_when_mastership_request_fails():
         pytest.fail("should not POST set after mastership failure")
     c, _ = _client_with_mock_session(post=post)
     assert c.write_rapid("T_ROB1", "Mod", "n", "1") is False
+
+
+# ---- RAPID array codec ------------------------------------------------------
+
+from rws_client import format_rapid_array, parse_rapid_array
+
+
+def test_parse_string_array():
+    assert parse_rapid_array('[["35x70"],["28x70"],[""]]') == [
+        ["35x70"], ["28x70"], [""],
+    ]
+
+
+def test_parse_nested_num_array():
+    out = parse_rapid_array("[[889,1778,1],[711,1778,1],[0,0,0]]")
+    assert out == [[889, 1778, 1], [711, 1778, 1], [0, 0, 0]]
+
+
+def test_parse_handles_floats_and_bools():
+    assert parse_rapid_array("[[1.5, TRUE], [2, FALSE]]") == [
+        [1.5, True], [2, False],
+    ]
+
+
+def test_parse_handles_escaped_quotes():
+    assert parse_rapid_array(r'[["he said \"hi\""]]') == [['he said "hi"']]
+
+
+def test_parse_rejects_garbage():
+    import pytest
+    with pytest.raises(ValueError):
+        parse_rapid_array("not an array")
+    with pytest.raises(ValueError):
+        parse_rapid_array("[1,]")               # trailing comma
+    with pytest.raises(ValueError):
+        parse_rapid_array("[")                  # unterminated
+
+
+def test_format_round_trip_strings():
+    src = [["35x70"], ["28x70"], [""]]
+    dumped = format_rapid_array(src)
+    assert dumped == '[["35x70"],["28x70"],[""]]'
+    assert parse_rapid_array(dumped) == src
+
+
+def test_format_round_trip_nums():
+    src = [[889, 1778, 1], [0, 0, 0]]
+    dumped = format_rapid_array(src)
+    assert dumped == "[[889,1778,1],[0,0,0]]"
+    assert parse_rapid_array(dumped) == src
+
+
+def test_format_escapes_quotes_in_strings():
+    assert format_rapid_array(['a"b']) == r'["a\"b"]'
+
+
+def test_format_floats_keep_decimal_when_fractional():
+    assert format_rapid_array([1.5]) == "[1.5]"
+    assert format_rapid_array([2.0]) == "[2]"

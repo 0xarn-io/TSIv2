@@ -226,3 +226,136 @@ def test_migrate_is_idempotent_on_fresh_dbs(tmp_path: Path):
         s2.add("cardboard", _size())                 # writes still work
     finally:
         s2.stop()
+
+
+# ---- slot helpers -----------------------------------------------------------
+
+from sizes_store import SizesChange
+
+
+def test_slot_unique_within_table(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        s.add("cardboard", _size(name="A", slot=3))
+        with pytest.raises(ValueError, match="already used"):
+            s.add("cardboard", _size(name="B", slot=3))
+    finally:
+        s.stop()
+
+
+def test_slot_unique_across_tables(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        s.add("cardboard", _size(name="A", slot=5))
+        with pytest.raises(ValueError, match="already used"):
+            s.add("others", _size(name="B", slot=5))
+    finally:
+        s.stop()
+
+
+def test_slot_out_of_range_rejected(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        with pytest.raises(ValueError, match="out of range"):
+            s.add("cardboard", _size(slot=99))
+    finally:
+        s.stop()
+
+
+def test_get_slot_finds_owner(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        s.add("cardboard", _size(name="A", slot=2))
+        s.add("others",    _size(name="B", slot=4))
+        out = s.get_slot(2)
+        assert out is not None and out[0] == "cardboard" and out[1].name == "A"
+        out = s.get_slot(4)
+        assert out is not None and out[0] == "others" and out[1].name == "B"
+        assert s.get_slot(0) is None
+    finally:
+        s.stop()
+
+
+def test_upsert_slot_creates_in_correct_table(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        # wood=False → cardboard
+        t1, _ = s.upsert_slot(0, "Box", 100, 200, wood=False)
+        assert t1 == "cardboard"
+        # wood=True → others
+        t2, _ = s.upsert_slot(1, "Wood", 1000, 1000, wood=True)
+        assert t2 == "others"
+    finally:
+        s.stop()
+
+
+def test_upsert_slot_moves_across_tables_on_wood_flip(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        s.upsert_slot(0, "Box", 100, 200, wood=False)
+        # Same slot, but now wood=True — row must move tables.
+        s.upsert_slot(0, "Box", 100, 200, wood=True)
+        assert s.get_slot(0)[0] == "others"
+        # Old table is empty.
+        assert all(r.slot != 0 for r in s.list("cardboard"))
+    finally:
+        s.stop()
+
+
+def test_upsert_slot_idempotent_on_unchanged_data(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        events: list = []
+        s.on_change(events.append)
+        t1, sid1 = s.upsert_slot(3, "X", 100, 200, wood=False)
+        events.clear()
+        t2, sid2 = s.upsert_slot(3, "X", 100, 200, wood=False)
+        assert (t1, sid1) == (t2, sid2)
+        assert events == []                 # no-op shouldn't fire on_change
+    finally:
+        s.stop()
+
+
+def test_clear_slot_returns_true_when_deleted(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        s.add("cardboard", _size(slot=7))
+        assert s.clear_slot(7) is True
+        assert s.clear_slot(7) is False     # already gone
+    finally:
+        s.stop()
+
+
+# ---- on_change subscription -------------------------------------------------
+
+def test_on_change_fires_on_add_update_delete(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        events: list[SizesChange] = []
+        s.on_change(events.append)
+
+        sid = s.add("cardboard", _size(name="A"))
+        assert events[-1].op == "add"
+
+        s.update("cardboard", Size(id=sid, name="A2", width_mm=1, length_mm=2))
+        assert events[-1].op == "update"
+
+        s.delete("cardboard", sid)
+        assert events[-1].op == "delete"
+        assert events[-1].size is None
+    finally:
+        s.stop()
+
+
+def test_silent_block_suppresses_on_change(tmp_path: Path):
+    s = _store(tmp_path); s.start()
+    try:
+        events: list = []
+        s.on_change(events.append)
+        with s.silent():
+            s.add("cardboard", _size())
+        assert events == []
+        s.add("cardboard", _size(name="loud"))   # post-silent
+        assert len(events) == 1
+    finally:
+        s.stop()

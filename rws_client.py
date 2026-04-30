@@ -132,6 +132,30 @@ class RWSClient:
         finally:
             self._mastership("release", silent=True)
 
+    # ---- RAPID array convenience -------------------------------------------
+
+    def read_rapid_array(
+        self, task: str, module: str, symbol: str,
+    ) -> Any | None:
+        """Read a RAPID array symbol; returns a nested Python list."""
+        raw = self.read_rapid(task, module, symbol)
+        if raw is None:
+            return None
+        try:
+            return parse_rapid_array(raw)
+        except Exception as e:
+            log.warning("RAPID array parse failed for %s/%s/%s: %s",
+                        task, module, symbol, e)
+            return None
+
+    def write_rapid_array(
+        self, task: str, module: str, symbol: str, value: Any,
+    ) -> bool:
+        """Write a (possibly-nested) Python list to a RAPID array symbol."""
+        return self.write_rapid(
+            task, module, symbol, format_rapid_array(value),
+        )
+
     # ---- mastership helpers ------------------------------------------------
 
     def _mastership(self, action: str, *, silent: bool = False) -> bool:
@@ -142,6 +166,112 @@ class RWSClient:
 
 
 # ---- module helpers --------------------------------------------------------
+
+def parse_rapid_array(s: str) -> Any:
+    """Parse a RAPID array literal (e.g. `[[889,1778,1],[711,1778,1]]`).
+
+    Supports nested arrays of `num`, `bool`, and `string` (quoted).
+    Returns a nested Python list / int / float / bool / str.
+    """
+    pos, value = _parse_value(s, 0)
+    rest = s[pos:].strip()
+    if rest:
+        raise ValueError(f"trailing content in RAPID literal: {rest!r}")
+    return value
+
+
+def format_rapid_array(value: Any) -> str:
+    """Inverse of parse_rapid_array. Strings get RAPID quote-and-escape."""
+    if isinstance(value, list):
+        return "[" + ",".join(format_rapid_array(v) for v in value) + "]"
+    if isinstance(value, bool):                      # bool is an int subclass
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        # Whole floats serialize as int to match RAPID's num literal style.
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return str(value)
+    if isinstance(value, str):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    raise TypeError(f"unsupported RAPID value: {type(value).__name__}")
+
+
+# ---- internals --------------------------------------------------------------
+
+def _parse_value(s: str, pos: int) -> tuple[int, Any]:
+    pos = _skip_ws(s, pos)
+    if pos >= len(s):
+        raise ValueError("unexpected end of RAPID literal")
+    ch = s[pos]
+    if ch == "[":
+        return _parse_array(s, pos)
+    if ch == '"':
+        return _parse_string(s, pos)
+    return _parse_scalar(s, pos)
+
+
+def _parse_array(s: str, pos: int) -> tuple[int, list]:
+    assert s[pos] == "["
+    pos += 1
+    items: list = []
+    pos = _skip_ws(s, pos)
+    if pos < len(s) and s[pos] == "]":
+        return pos + 1, items
+    while True:
+        pos, v = _parse_value(s, pos)
+        items.append(v)
+        pos = _skip_ws(s, pos)
+        if pos >= len(s):
+            raise ValueError("unterminated RAPID array")
+        if s[pos] == ",":
+            pos += 1
+            continue
+        if s[pos] == "]":
+            return pos + 1, items
+        raise ValueError(f"unexpected char {s[pos]!r} at pos {pos}")
+
+
+def _parse_string(s: str, pos: int) -> tuple[int, str]:
+    assert s[pos] == '"'
+    pos += 1
+    buf: list[str] = []
+    while pos < len(s):
+        ch = s[pos]
+        if ch == "\\" and pos + 1 < len(s):
+            buf.append(s[pos + 1])
+            pos += 2
+            continue
+        if ch == '"':
+            return pos + 1, "".join(buf)
+        buf.append(ch)
+        pos += 1
+    raise ValueError("unterminated RAPID string")
+
+
+def _parse_scalar(s: str, pos: int) -> tuple[int, Any]:
+    end = pos
+    while end < len(s) and s[end] not in ",]":
+        end += 1
+    raw = s[pos:end].strip()
+    if not raw:
+        raise ValueError(f"empty scalar at pos {pos}")
+    upper = raw.upper()
+    if upper == "TRUE":  return end, True
+    if upper == "FALSE": return end, False
+    try:
+        if "." in raw or "e" in raw.lower():
+            return end, float(raw)
+        return end, int(raw)
+    except ValueError as e:
+        raise ValueError(f"bad RAPID scalar {raw!r}: {e}") from e
+
+
+def _skip_ws(s: str, pos: int) -> int:
+    while pos < len(s) and s[pos] in " \t\r\n":
+        pos += 1
+    return pos
+
 
 def _extract_rapid_value(obj: dict) -> Optional[str]:
     """Pull the `value` field out of an RWS RAPID symbol response.

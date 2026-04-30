@@ -92,11 +92,12 @@ class SizesPanel:
             "uppercase tracking-wider text-gray-500 border-b border-[#E5E9EE]"
         ):
             ui.label("ID").classes("w-12")
+            ui.label("Slot").classes("w-14 text-right")
             ui.label("Name").classes("w-40")
             ui.label("W (mm)").classes("w-24 text-right")
             ui.label("L (mm)").classes("w-24 text-right")
-            ui.label("≈ W (in)").classes("w-24 text-right text-gray-400")
-            ui.label("≈ L (in)").classes("w-24 text-right text-gray-400")
+            ui.label("≈ W (in)").classes("w-20 text-right text-gray-400")
+            ui.label("≈ L (in)").classes("w-20 text-right text-gray-400")
             ui.label("").classes("flex-grow")
 
     def _render_row(self, table: str, s: Size) -> None:
@@ -107,14 +108,18 @@ class SizesPanel:
             ui.label(str(s.id)).classes(
                 "w-12 font-mono text-xs text-gray-500"
             )
+            slot_text = "—" if s.slot is None else str(s.slot)
+            ui.label(slot_text).classes(
+                "w-14 text-right font-mono text-xs text-[#0053A1]"
+            )
             ui.label(s.name).classes("w-40 font-medium")
             ui.label(str(s.width_mm)).classes("w-24 text-right font-mono")
             ui.label(str(s.length_mm)).classes("w-24 text-right font-mono")
             ui.label(str(_mm_to_in(s.width_mm))).classes(
-                "w-24 text-right font-mono text-gray-400"
+                "w-20 text-right font-mono text-gray-400"
             )
             ui.label(str(_mm_to_in(s.length_mm))).classes(
-                "w-24 text-right font-mono text-gray-400"
+                "w-20 text-right font-mono text-gray-400"
             )
             with ui.row().classes("flex-grow justify-end gap-1"):
                 ui.button(
@@ -141,10 +146,17 @@ class SizesPanel:
                 ui.label(title).classes("text-base font-semibold")
 
             with ui.column().classes("gap-4 p-5 w-full"):
-                name = ui.input(
-                    "Name",
-                    value=existing.name if existing else "",
-                ).classes("w-full")
+                with ui.row().classes("gap-3 w-full items-center"):
+                    name = ui.input(
+                        "Name",
+                        value=existing.name if existing else "",
+                    ).classes("flex-grow")
+                    slot = ui.number(
+                        "Slot (0–19, blank = none)",
+                        value=(existing.slot if existing and existing.slot is not None
+                               else None),
+                        format="%d", min=0, max=19,
+                    ).classes("w-48")
 
                 with card("Dimensions (mm)"):
                     with ui.grid(columns=2).classes("w-full gap-3"):
@@ -182,12 +194,21 @@ class SizesPanel:
                     ).props("flat dense color=primary").classes("mt-2")
 
                 def submit() -> None:
+                    raw_slot = slot.value
+                    slot_val: int | None = None
+                    if raw_slot not in (None, ""):
+                        try:
+                            slot_val = int(raw_slot)
+                        except (TypeError, ValueError):
+                            ui.notify("Slot must be an integer 0–19", type="warning")
+                            return
                     try:
                         s = Size(
                             id=existing.id if existing else None,
                             name=(name.value or "").strip(),
                             width_mm=int(wmm.value or 0),
                             length_mm=int(lmm.value or 0),
+                            slot=slot_val,
                         )
                         if not s.name:
                             ui.notify("Name is required", type="warning")

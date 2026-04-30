@@ -31,18 +31,24 @@ log = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class RobotConfig:
-    ip:                 str
-    username:           str  = "Admin"
-    password:           str  = "robotics"
-    verify_ssl:         bool = False
-    poll_ms:            int  = 2000
-    timeout_s:          float = 2.0
+    ip:                  str
+    username:            str  = "Admin"
+    password:            str  = "robotics"
+    verify_ssl:          bool = False
+    poll_ms:             int  = 2000
+    timeout_s:           float = 2.0
     # Elog mirror — set elog_poll_ms = 0 to disable.
-    elog_poll_ms:       int  = 5000
-    elog_domain:        int  = 0
-    elog_limit:         int  = 50
-    elog_include_info:  bool = False
-    vars:               tuple[RobotVariableConfig, ...] = field(default_factory=tuple)
+    elog_poll_ms:        int  = 5000
+    elog_domain:         int  = 0
+    elog_limit:          int  = 50
+    elog_include_info:   bool = False
+    # Master arrays mirror — set master_poll_ms = 0 to disable.
+    master_poll_ms:      int  = 2000
+    master_task:         str  = "T_ROB1"
+    master_module:       str  = "MainModule"
+    master_symbol:       str  = "Master"
+    master_dims_symbol:  str  = "Master_Dimmensions"
+    vars:                tuple[RobotVariableConfig, ...] = field(default_factory=tuple)
 
 
 @dataclass

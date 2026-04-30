@@ -38,6 +38,7 @@ from dashboard        import Dashboard
 from db_orchestrator  import DBOrchestrator
 from plc_heartbeat    import PLCHeartbeat
 from robot_errors     import RobotElogPoller
+from robot_master     import RobotMasterMonitor
 from robot_publisher  import RobotPublisher
 from robot_status     import RobotMonitor
 from robot_variables  import RobotVariablesMonitor
@@ -84,6 +85,17 @@ robot_elog = (
     )
     if robot and db.errors and cfg.robot and cfg.robot.elog_poll_ms > 0 else None
 )
+robot_master = (
+    RobotMasterMonitor(
+        robot.client, db.sizes,
+        task          = cfg.robot.master_task,
+        module        = cfg.robot.master_module,
+        master_symbol = cfg.robot.master_symbol,
+        dims_symbol   = cfg.robot.master_dims_symbol,
+        poll_ms       = cfg.robot.master_poll_ms,
+    )
+    if robot and db.sizes and cfg.robot and cfg.robot.master_poll_ms > 0 else None
+)
 
 
 # ─── ui ──────────────────────────────────────────────────────────────────────
@@ -117,14 +129,16 @@ def _startup() -> None:
     if robot:      robot.start()
     if robot_pub:  robot_pub.start()
     db.start()
-    if robot_vars: robot_vars.start()     # depends on db.errors being open
-    if robot_elog: robot_elog.start()     # mirror RWS event log into errors_store
+    if robot_vars:   robot_vars.start()     # depends on db.errors being open
+    if robot_elog:   robot_elog.start()     # mirror RWS event log into errors_store
+    if robot_master: robot_master.start()   # mirror Master arrays ↔ sizes DB
 
 
 @app.on_shutdown
 def _shutdown() -> None:
-    if robot_elog: robot_elog.stop()
-    if robot_vars: robot_vars.stop()
+    if robot_master: robot_master.stop()
+    if robot_elog:   robot_elog.stop()
+    if robot_vars:   robot_vars.stop()
     db.stop()
     if robot_pub:  robot_pub.stop()
     if robot:      robot.stop()
