@@ -225,30 +225,53 @@ class RWSClient:
 
     # ---- mastership helpers ------------------------------------------------
 
-    def _mastership(self, action: str, *, silent: bool = False) -> bool:
-        """Request or release edit mastership.
+    # OmniCore mastership URI varies by firmware; we probe on first call
+    # and lock onto whichever shape the controller accepts.
+    _MASTERSHIP_PROBES: tuple[tuple[str, dict | None, dict | None], ...] = (
+        # (path, query_params, body_data) — params merged with action
+        ("/rw/mastership/edit", {"action": "$"}, None),
+        ("/rw/mastership",      {"action": "$"}, None),
+        ("/rw/mastership/edit", None,            {"action": "$"}),
+        ("/rw/mastership",      None,            {"action": "$"}),
+    )
+    _mastership_uri: tuple[str, dict | None, dict | None] | None = None
 
-        OmniCore exposes two URL shapes depending on firmware:
-            POST /rw/mastership/edit?action=request   (RW 7.x newer)
-            POST /rw/mastership?action=request        (older / universal)
-        Try the universal form first — it works on every controller we've
-        tested. Fall back to the per-domain path only if the first 404s.
+    def _mastership(self, action: str, *, silent: bool = False) -> bool:
+        """Request or release edit mastership. Probes URI shapes on first
+        call and locks onto whichever the controller accepts.
         """
-        for path in ("/rw/mastership", "/rw/mastership/edit"):
-            r = self.post(path, params={"action": action}, silent=True)
+        def fill(template):
+            if template is None:
+                return None
+            return {k: (action if v == "$" else v) for k, v in template.items()}
+
+        if self._mastership_uri is not None:
+            path, q, b = self._mastership_uri
+            r = self.post(path, params=fill(q), data=fill(b), silent=silent)
+            return bool(r is not None and r.ok)
+
+        attempts: list[str] = []
+        for path, q, b in self._MASTERSHIP_PROBES:
+            r = self.post(path, params=fill(q), data=fill(b), silent=True)
             if r is not None and r.ok:
+                self._mastership_uri = (path, q, b)
+                log.info(
+                    "mastership: locked onto %s (%s)", path,
+                    "query" if q else "body",
+                )
                 return True
-            if r is not None and r.status_code != 404:
-                # Non-404 means the path was found but rejected — don't
-                # try other paths (would mask the real error).
-                if not silent:
-                    log.warning(
-                        "mastership %s failed: %s %s",
-                        action, r.status_code, r.text[:120],
-                    )
-                return False
+            if r is None:
+                summary = "no response"
+            else:
+                summary = f"{r.status_code} {(r.text or '')[:120].strip()}"
+            attempts.append(
+                f"{path} [{'query' if q else 'body'}] -> {summary}"
+            )
         if not silent:
-            log.warning("mastership %s: no known URI accepted by controller", action)
+            log.warning(
+                "mastership %s: no probe accepted\n  %s",
+                action, "\n  ".join(attempts),
+            )
         return False
 
 

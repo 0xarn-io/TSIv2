@@ -36,9 +36,11 @@ class ErrorsPanel:
         with ui.column().classes("w-full gap-4 p-6"):
             self._render_filters()
             self._rows_container = ui.column().classes("w-full gap-1")
+            # Parent the timer to the page container so NiceGUI destroys
+            # it when the user navigates away. Stops orphaned ticks
+            # raising "parent slot deleted".
+            self._timer = ui.timer(_REFRESH_INTERVAL_S, self._refresh)
         self._refresh()
-        # auto-refresh
-        self._timer = ui.timer(_REFRESH_INTERVAL_S, self._refresh)
 
     # ---- filter bar ---------------------------------------------------------
 

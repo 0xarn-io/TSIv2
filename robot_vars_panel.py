@@ -42,8 +42,9 @@ class RobotVarsPanel:
                 self._render_header()
                 for cfg in self.monitor.vars.values():
                     self._render_row(cfg)
+            # Parent the timer to this column so it dies with the page.
+            self._timer = ui.timer(_REFRESH_INTERVAL_S, self._refresh)
         self._refresh()
-        self._timer = ui.timer(_REFRESH_INTERVAL_S, self._refresh)
 
     # ---- rendering ----------------------------------------------------------
 

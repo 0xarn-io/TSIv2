@@ -80,31 +80,35 @@ def test_read_rapid_failure_returns_none():
 # ---- write_rapid ------------------------------------------------------------
 
 def test_write_rapid_acquires_and_releases_mastership():
-    calls: list[tuple[str, dict]] = []
+    calls: list[tuple[str, str | None]] = []
     def post(url, params=None, data=None, headers=None, timeout=None):
-        calls.append((url, dict(params or {})))
+        # action may live in either params or data depending on which
+        # mastership URI shape we ended up using.
+        action = (params or {}).get("action") or (data or {}).get("action")
+        calls.append((url, action))
         return _ok()
     c, _ = _client_with_mock_session(post=post)
 
     assert c.write_rapid("T_ROB1", "MainModule", "n", "42") is True
 
-    paths = [(url, p.get("action")) for url, p in calls]
-    assert paths[0]  == ("https://1.2.3.4/rw/mastership", "request")
-    # POST .../data (no ?action=set query) — body carries the value=...
-    assert paths[1]  == (
+    # First POST acquires mastership (some flavour of /rw/mastership[/edit]).
+    assert "rw/mastership" in calls[0][0]
+    assert calls[0][1] == "request"
+    # Then the data POST.
+    assert calls[1] == (
         "https://1.2.3.4/rw/rapid/symbol/RAPID/T_ROB1/MainModule/n/data",
         None,
     )
-    assert paths[-1] == ("https://1.2.3.4/rw/mastership", "release")
+    # Finally, release on the same URI we locked onto.
+    assert calls[-1][0] == calls[0][0]
+    assert calls[-1][1] == "release"
 
 
 def test_write_rapid_releases_mastership_even_when_set_fails():
     """Even if the data POST fails, mastership must still be released."""
     posts: list[str] = []
     def post(url, params=None, data=None, headers=None, timeout=None):
-        # Distinguish the three POSTs by URL/action: mastership uses an
-        # ?action= query, the data POST goes to /rw/rapid/symbol/.../data.
-        action = (params or {}).get("action")
+        action = (params or {}).get("action") or (data or {}).get("action")
         if "/rw/rapid/symbol/" in url:
             posts.append("write")
             return _ok(status=500, ok=False)
@@ -117,10 +121,12 @@ def test_write_rapid_releases_mastership_even_when_set_fails():
 
 
 def test_write_rapid_aborts_when_mastership_request_fails():
+    """Every mastership probe shape returns 403 → write must not run."""
     def post(url, params=None, data=None, headers=None, timeout=None):
-        if (params or {}).get("action") == "request":
+        action = (params or {}).get("action") or (data or {}).get("action")
+        if "/rw/mastership" in url and action in ("request", "release"):
             return _ok(status=403, ok=False)
-        pytest.fail("should not POST set after mastership failure")
+        pytest.fail(f"unexpected POST {url} (action={action})")
     c, _ = _client_with_mock_session(post=post)
     assert c.write_rapid("T_ROB1", "Mod", "n", "1") is False
 
