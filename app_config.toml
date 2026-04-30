@@ -81,6 +81,11 @@ password   = "robotics"
 verify_ssl = false
 poll_ms    = 2000
 timeout_s  = 2.0
+# Mirror the RWS event log into errors_store. Set to 0 to disable.
+elog_poll_ms      = 5000
+elog_domain       = 0
+elog_limit        = 50
+elog_include_info = false
 
 # Optional: declare RAPID symbols to read (and optionally write) via RWS.
 # Each entry is polled at its own poll_ms; values are routed to the listed

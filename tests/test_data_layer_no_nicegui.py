@@ -27,6 +27,7 @@ DATA_LAYER_MODULES = (
     "sick_bridge.py",
     "sick_publisher.py",
     "snapshot_archive.py",
+    "robot_errors.py",
     "robot_publisher.py",
     "robot_status.py",
     "robot_variables.py",

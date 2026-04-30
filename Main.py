@@ -37,6 +37,7 @@ from config           import AppConfig
 from dashboard        import Dashboard
 from db_orchestrator  import DBOrchestrator
 from plc_heartbeat    import PLCHeartbeat
+from robot_errors     import RobotElogPoller
 from robot_publisher  import RobotPublisher
 from robot_status     import RobotMonitor
 from robot_variables  import RobotVariablesMonitor
@@ -73,6 +74,16 @@ robot_vars = (
     )
     if robot and cfg.robot and cfg.robot.vars else None
 )
+robot_elog = (
+    RobotElogPoller(
+        robot, db.errors,
+        poll_ms      = cfg.robot.elog_poll_ms,
+        domain       = cfg.robot.elog_domain,
+        limit        = cfg.robot.elog_limit,
+        include_info = cfg.robot.elog_include_info,
+    )
+    if robot and db.errors and cfg.robot and cfg.robot.elog_poll_ms > 0 else None
+)
 
 
 # ─── ui ──────────────────────────────────────────────────────────────────────
@@ -107,10 +118,12 @@ def _startup() -> None:
     if robot_pub:  robot_pub.start()
     db.start()
     if robot_vars: robot_vars.start()     # depends on db.errors being open
+    if robot_elog: robot_elog.start()     # mirror RWS event log into errors_store
 
 
 @app.on_shutdown
 def _shutdown() -> None:
+    if robot_elog: robot_elog.stop()
     if robot_vars: robot_vars.stop()
     db.stop()
     if robot_pub:  robot_pub.stop()
