@@ -9,15 +9,15 @@
 #
 # Comment all of them out (or delete this file) to disable the Vars tab.
 
-# [[vars]]
-# alias    = "speed_setpoint"
-# task     = "T_ROB1"
-# module   = "MainModule"
-# symbol   = "speed_setpoint"
-# type     = "num"           # num | bool | string
-# mode     = "rw"            # r | rw
-# poll_ms  = 1000
-# targets  = ["ui"]
+[[vars]]
+alias    = "Cycle_counter"
+task     = "T_ROB1"
+module   = "Main_Flow"
+symbol   = "Cycle_counter"
+type     = "num"           # num | bool | string
+mode     = "r"            # r | rw
+poll_ms  = 1000
+targets  = ["ui"]
 #
 # [[vars]]
 # alias    = "production_count"
