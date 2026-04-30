@@ -64,24 +64,11 @@ def test_read_rapid_url_and_value():
     )
     out = c.read_rapid("T_ROB1", "MainModule", "n")
     assert out == "5"
-    # Should hit the ;value subresource first; bare path is the fallback.
-    first_url = sess.get.call_args_list[0].args[0]
-    assert first_url == (
-        "https://1.2.3.4/rw/rapid/symbol/data/RAPID/T_ROB1/MainModule/n;value"
+    # OmniCore RWS path: encoded symbol URI followed by /data subresource.
+    url = sess.get.call_args.args[0]
+    assert url == (
+        "https://1.2.3.4/rw/rapid/symbol/RAPID%2FT_ROB1%2FMainModule%2Fn/data"
     )
-
-
-def test_read_rapid_falls_back_to_bare_path_when_value_404s():
-    calls: list[str] = []
-    def get(url, **kw):
-        calls.append(url)
-        if url.endswith(";value"):
-            return _ok(status=404, ok=False)
-        return _ok({"_embedded": {"_state": [{"value": "5"}]}})
-    c, _ = _client_with_mock_session(get=get)
-    assert c.read_rapid("T_ROB1", "MainModule", "n") == "5"
-    assert calls[0].endswith(";value")
-    assert calls[1].endswith("/n")                   # fallback to bare path
 
 
 def test_read_rapid_failure_returns_none():
@@ -102,7 +89,10 @@ def test_write_rapid_acquires_and_releases_mastership():
 
     paths = [(url, p.get("action")) for url, p in calls]
     assert paths[0]  == ("https://1.2.3.4/rw/mastership/edit", "request")
-    assert paths[1]  == ("https://1.2.3.4/rw/rapid/symbol/data/RAPID/T_ROB1/MainModule/n", "set")
+    assert paths[1]  == (
+        "https://1.2.3.4/rw/rapid/symbol/RAPID%2FT_ROB1%2FMainModule%2Fn/data",
+        "set",
+    )
     assert paths[-1] == ("https://1.2.3.4/rw/mastership/edit", "release")
 
 
