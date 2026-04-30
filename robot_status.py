@@ -45,7 +45,7 @@ class RobotConfig:
     # Master arrays mirror — set master_poll_ms = 0 to disable.
     master_poll_ms:      int  = 2000
     master_task:         str  = "T_ROB1"
-    master_module:       str  = "MainModule"
+    master_module:       str  = "Stations"
     master_symbol:       str  = "Master"
     master_dims_symbol:  str  = "Master_Dimmensions"
     vars:                tuple[RobotVariableConfig, ...] = field(default_factory=tuple)

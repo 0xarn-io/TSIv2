@@ -92,7 +92,7 @@ elog_include_info = false
 # Master_Dimmensions) routes the row: 1 → others, 0 → cardboard.
 master_poll_ms     = 2000
 master_task        = "T_ROB1"
-master_module      = "MainModule"
+master_module      = "Stations"
 master_symbol      = "Master"
 master_dims_symbol = "Master_Dimmensions"
 
