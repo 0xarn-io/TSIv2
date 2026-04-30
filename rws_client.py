@@ -295,16 +295,20 @@ def _extract_rapid_value(obj: dict) -> Optional[str]:
 
     RWS shapes vary across firmware versions; check several common ones.
     """
-    # HAL+JSON shape: _embedded._state[0].value
-    state = (
-        obj.get("_embedded", {}).get("_state")
-        or obj.get("_embedded", {}).get("state")
-    )
-    if isinstance(state, list) and state and isinstance(state[0], dict):
-        v = state[0].get("value")
-        if v is not None:
-            return str(v)
+    embedded = obj.get("_embedded") or {}
+    # HAL+JSON shapes — keys we've seen in the wild: _state, state, resources.
+    for key in ("_state", "state", "resources"):
+        block = embedded.get(key)
+        if isinstance(block, list) and block and isinstance(block[0], dict):
+            v = block[0].get("value")
+            if v is not None:
+                return str(v)
     # Flat shape: {"value": "..."}.
     if "value" in obj:
         return str(obj["value"])
+    log.warning(
+        "RAPID value not found; response keys=%s embedded keys=%s",
+        list(obj.keys()),
+        list(embedded.keys()) if isinstance(embedded, dict) else None,
+    )
     return None
