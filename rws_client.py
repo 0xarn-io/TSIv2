@@ -42,7 +42,14 @@ class RWSClient:
         s = requests.Session()
         s.auth   = HTTPBasicAuth(self.cfg.username, self.cfg.password)
         s.verify = self.cfg.verify_ssl
-        s.headers.update({"Accept": "application/hal+json;v=2.0"})
+        # Accept hal+json regardless of RWS version — some endpoints (e.g.
+        # /rw/rapid/tasks) refuse the v=2.0 pin even on OmniCore. Listing
+        # the variants lets the server pick whatever it can render.
+        s.headers.update({"Accept": (
+            "application/hal+json;v=2.0, "
+            "application/hal+json;v=1.0, "
+            "application/hal+json"
+        )})
         return s
 
     def _url(self, path: str) -> str:
