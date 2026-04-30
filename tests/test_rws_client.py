@@ -64,14 +64,12 @@ def test_read_rapid_url_and_value():
     )
     out = c.read_rapid("T_ROB1", "MainModule", "n")
     assert out == "5"
-    # OmniCore RWS path: encoded symbol URI + /data subresource, with
-    # ?json=1 + Accept override (the data subresource refuses hal+json).
+    # OmniCore RWS path: plain slashes, /data subresource at the end.
+    # Matches the omnicore-sdk.js getSymbolUrl shape.
     call = sess.get.call_args
     assert call.args[0] == (
-        "https://1.2.3.4/rw/rapid/symbol/RAPID%2FT_ROB1%2FMainModule%2Fn/data"
+        "https://1.2.3.4/rw/rapid/symbol/RAPID/T_ROB1/MainModule/n/data"
     )
-    assert call.kwargs["params"] == {"json": "1"}
-    assert call.kwargs["headers"] == {"Accept": "application/json"}
 
 
 def test_read_rapid_failure_returns_none():
@@ -83,7 +81,7 @@ def test_read_rapid_failure_returns_none():
 
 def test_write_rapid_acquires_and_releases_mastership():
     calls: list[tuple[str, dict]] = []
-    def post(url, params=None, data=None, timeout=None):
+    def post(url, params=None, data=None, headers=None, timeout=None):
         calls.append((url, dict(params or {})))
         return _ok()
     c, _ = _client_with_mock_session(post=post)
@@ -92,29 +90,34 @@ def test_write_rapid_acquires_and_releases_mastership():
 
     paths = [(url, p.get("action")) for url, p in calls]
     assert paths[0]  == ("https://1.2.3.4/rw/mastership/edit", "request")
+    # POST .../data (no ?action=set query) — body carries the value=...
     assert paths[1]  == (
-        "https://1.2.3.4/rw/rapid/symbol/RAPID%2FT_ROB1%2FMainModule%2Fn/data",
-        "set",
+        "https://1.2.3.4/rw/rapid/symbol/RAPID/T_ROB1/MainModule/n/data",
+        None,
     )
     assert paths[-1] == ("https://1.2.3.4/rw/mastership/edit", "release")
 
 
 def test_write_rapid_releases_mastership_even_when_set_fails():
+    """Even if the data POST fails, mastership must still be released."""
     posts: list[str] = []
-    def post(url, params=None, data=None, timeout=None):
+    def post(url, params=None, data=None, headers=None, timeout=None):
+        # Distinguish the three POSTs by URL/action: mastership uses an
+        # ?action= query, the data POST goes to /rw/rapid/symbol/.../data.
         action = (params or {}).get("action")
-        posts.append(action)
-        if action == "set":
+        if "/rw/rapid/symbol/" in url:
+            posts.append("write")
             return _ok(status=500, ok=False)
+        posts.append(action)
         return _ok()
     c, _ = _client_with_mock_session(post=post)
 
     assert c.write_rapid("T_ROB1", "Mod", "n", "1") is False
-    assert posts == ["request", "set", "release"]
+    assert posts == ["request", "write", "release"]
 
 
 def test_write_rapid_aborts_when_mastership_request_fails():
-    def post(url, params=None, data=None, timeout=None):
+    def post(url, params=None, data=None, headers=None, timeout=None):
         if (params or {}).get("action") == "request":
             return _ok(status=403, ok=False)
         pytest.fail("should not POST set after mastership failure")

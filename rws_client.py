@@ -86,8 +86,11 @@ class RWSClient:
     ) -> Optional[requests.Response]:
         """Form-encoded POST. Returns the Response (caller checks .ok), or None."""
         try:
+            # Mirror the OmniCore SDK exactly: explicit Content-Type with
+            # the v=2.0 suffix the controller insists on for some POSTs.
             r = self._session.post(
                 self._url(path), params=params, data=data,
+                headers={"Content-Type": "application/x-www-form-urlencoded;v=2.0"},
                 timeout=timeout or self.cfg.timeout_s,
             )
             if not r.ok and not silent:
@@ -104,41 +107,23 @@ class RWSClient:
     # ---- RAPID symbol convenience ------------------------------------------
 
     @staticmethod
-    def _rapid_symbol_uri(task: str, module: str, symbol: str) -> str:
-        """URL-encoded RAPID symbol URI used as a single path segment on
-        OmniCore RWS:
-
-            /rw/rapid/symbol/RAPID%2FT_ROB1%2FStations%2FMaster/data
-                              └────── symbol uri ──────┘ subresource
-
-        The IRC5 / older RWS form (`/rw/rapid/symbol/data/RAPID/...`) is
-        not valid on OmniCore firmwares — it returns 404.
-        """
-        return f"RAPID%2F{task}%2F{module}%2F{symbol}"
-
-    @staticmethod
     def _rapid_path(task: str, module: str, symbol: str,
                     subresource: str = "data") -> str:
-        return (
-            "/rw/rapid/symbol/"
-            + RWSClient._rapid_symbol_uri(task, module, symbol)
-            + "/" + subresource
-        )
+        """OmniCore RWS uses plain slashes between path segments and puts
+        the subresource (data / properties) at the end:
+
+            /rw/rapid/symbol/RAPID/T_ROB1/Stations/Master/data
+
+        This matches what the OmniCore JS SDK (omnicore-sdk.js
+        getSymbolUrl) builds for both reads and writes.
+        """
+        return f"/rw/rapid/symbol/RAPID/{task}/{module}/{symbol}/{subresource}"
 
     def read_rapid(
         self, task: str, module: str, symbol: str,
     ) -> Optional[str]:
-        """Read a RAPID symbol's raw value string. Returns None on failure.
-
-        The /data subresource won't honour `application/hal+json;v=2.0`
-        even though /properties does — ask for plain JSON via `?json=1`
-        and override Accept on this call only.
-        """
-        obj = self.get(
-            self._rapid_path(task, module, symbol, "data"),
-            params={"json": "1"},
-            accept="application/json",
-        )
+        """Read a RAPID symbol's raw value string. Returns None on failure."""
+        obj = self.get(self._rapid_path(task, module, symbol, "data"))
         if obj is None:
             return None
         return _extract_rapid_value(obj)
@@ -146,13 +131,16 @@ class RWSClient:
     def write_rapid(
         self, task: str, module: str, symbol: str, value: str,
     ) -> bool:
-        """Write a RAPID symbol value. Acquires + releases mastership."""
+        """Write a RAPID symbol value. Acquires + releases mastership.
+
+        OmniCore's POST `.../data` with `value=…` body suffices — no
+        `?action=set` query needed.
+        """
         if not self._mastership("request"):
             return False
         try:
             r = self.post(
                 self._rapid_path(task, module, symbol, "data"),
-                params={"action": "set"},
                 data={"value": value},
             )
             return bool(r is not None and r.ok)
