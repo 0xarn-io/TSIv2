@@ -22,7 +22,6 @@ from robot_publisher  import RobotStatusConfig
 from robot_status     import RobotConfig
 from robot_variables  import RobotVariableConfig
 from sick_publisher   import PublisherConfig
-from sizes_publisher  import SizeSetpointConfig
 from sizes_store      import SizesConfig
 from snapshot_archive import SnapshotArchiveConfig
 from unit_logger      import UnitLoggerConfig
@@ -36,7 +35,6 @@ class PLCSettings:
     heartbeat:       HeartbeatConfig | None
     robot_status:    RobotStatusConfig | None
     recipe:          RecipePublisherConfig | None
-    size_setpoints:  list[SizeSetpointConfig]
 
 
 @dataclass(frozen=True)
@@ -99,10 +97,6 @@ class AppConfig:
                     RecipePublisherConfig(**d["plc"]["recipe"])
                     if "recipe" in d["plc"] else None
                 ),
-                size_setpoints=[
-                    SizeSetpointConfig(**s)
-                    for s in d["plc"].get("size_setpoints", [])
-                ],
             ),
             scanner=ScannerSettings(**d["scanner"]),
             ui=UISettings(**d["ui"]),

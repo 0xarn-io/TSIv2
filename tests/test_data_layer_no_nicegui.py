@@ -20,7 +20,6 @@ DATA_LAYER_MODULES = (
     "recipe_publisher.py",
     "errors_store.py",
     "sizes_store.py",
-    "sizes_publisher.py",
     "unit_logger.py",
     "db_orchestrator.py",
     "twincat_comm.py",

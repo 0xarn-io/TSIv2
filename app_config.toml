@@ -28,17 +28,6 @@ status_alias = "robot.status"
 code_alias      = "recipe.code"
 setpoints_alias = "recipe.setpoints"
 
-# Optional: active-size bridge. Each entry pairs a DINT size id
-# (PLC writes) with an ST_SizeSetpoints struct (Python writes). The
-# `name` field is just a log label. Requires [sizes] below + matching
-# symbols in plc_signals.toml. Disabled by default — the PLC doesn't
-# currently need the mm dimensions; the robot owns dimension-aware
-# motion via Master_Dimmensions.
-# [[plc.size_setpoints]]
-# name            = "main"
-# code_alias      = "size.main_id"
-# setpoints_alias = "size.main_setpoints"
-
 # Map PLC bool aliases (in plc_signals.toml) to camera names (below).
 # Rising edge on the PLC bool fires a snapshot from that camera.
 [[plc.camera_triggers]]
