@@ -106,8 +106,16 @@ class RWSClient:
     def read_rapid(
         self, task: str, module: str, symbol: str,
     ) -> Optional[str]:
-        """Read a RAPID symbol's raw value string. Returns None on failure."""
-        obj = self.get(self._rapid_path(task, module, symbol))
+        """Read a RAPID symbol's raw value string. Returns None on failure.
+
+        Tries the OmniCore `;value` subresource form first (where the data
+        for symbol is exposed) then falls back to the bare path.
+        """
+        base = self._rapid_path(task, module, symbol)
+        obj = self.get_first(
+            base + ";value",
+            base,
+        )
         if obj is None:
             return None
         return _extract_rapid_value(obj)
