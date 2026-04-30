@@ -124,8 +124,99 @@ poll_ms = 1500
     assert isinstance(cfg.robot, RobotConfig)
     assert cfg.robot.ip == "192.168.125.1"
     assert cfg.robot.poll_ms == 1500
+    assert cfg.robot.vars == ()                    # nothing declared
     assert isinstance(cfg.plc.robot_status, RobotStatusConfig)
     assert cfg.plc.robot_status.status_alias == "robot.status"
+
+
+def test_robot_vars_loaded_from_separate_file(tmp_path: Path, signals_toml: Path):
+    """vars_file points at a sibling TOML containing [[vars]] entries."""
+    vars_path = tmp_path / "robot_vars.toml"
+    vars_path.write_text("""
+[[vars]]
+alias    = "speed"
+task     = "T_ROB1"
+module   = "Main"
+symbol   = "speed"
+type     = "num"
+mode     = "rw"
+poll_ms  = 1000
+targets  = ["ui"]
+
+[[vars]]
+alias    = "counter"
+task     = "T_ROB1"
+module   = "Main"
+symbol   = "counter"
+type     = "num"
+mode     = "r"
+poll_ms  = 5000
+targets  = ["ui", "log"]
+""")
+    p = tmp_path / "with_vars.toml"
+    p.write_text(f"""
+[plc]
+vars_file = "{signals_toml.name}"
+[plc.publisher]
+event_alias = "sick.event"
+live_alias = "sick.live"
+enable_alias = "sick.enable"
+[scanner]
+udp_port_a = 2111
+udp_port_b = 2112
+separation_m = 2.45
+belt_speed_mps = 0.254
+belt_y = -1.48
+[ui]
+refresh_hz = 10.0
+host = "0.0.0.0"
+port = 8080
+title = "Test"
+[[cameras]]
+name = "x"
+url = "rtsp://x"
+[robot]
+ip = "1.2.3.4"
+vars_file = "robot_vars.toml"
+""")
+    cfg = AppConfig.load(p)
+    assert len(cfg.robot.vars) == 2
+    aliases = [v.alias for v in cfg.robot.vars]
+    assert aliases == ["speed", "counter"]
+    assert cfg.robot.vars[0].mode == "rw"
+    assert cfg.robot.vars[1].targets == ("ui", "log")
+
+
+def test_robot_vars_file_missing_yields_empty_list(tmp_path: Path, signals_toml: Path):
+    """A non-existent vars_file is treated as no entries (Vars tab silently absent)."""
+    p = tmp_path / "ghost_vars.toml"
+    p.write_text(f"""
+[plc]
+vars_file = "{signals_toml.name}"
+[plc.publisher]
+event_alias = "sick.event"
+live_alias = "sick.live"
+enable_alias = "sick.enable"
+[scanner]
+udp_port_a = 2111
+udp_port_b = 2112
+separation_m = 2.45
+belt_speed_mps = 0.254
+belt_y = -1.48
+[ui]
+refresh_hz = 10.0
+host = "0.0.0.0"
+port = 8080
+title = "Test"
+[[cameras]]
+name = "x"
+url = "rtsp://x"
+[robot]
+ip = "1.2.3.4"
+vars_file = "does_not_exist.toml"
+""")
+    cfg = AppConfig.load(p)
+    assert cfg.robot.vars == ()
 
 
 def test_data_layer_optional_absent(app_toml: Path):

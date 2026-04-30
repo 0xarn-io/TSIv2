@@ -3,3 +3,10 @@ __pycache__/
 *.egg-info/
 .venv/
 .env
+
+# Runtime data — never commit. Schemas are recreated on startup.
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/snapshots/

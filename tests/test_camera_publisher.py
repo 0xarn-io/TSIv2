@@ -49,8 +49,8 @@ def test_start_rejects_unknown_camera():
         pub.start()
 
 
-def test_rising_edge_fires_camera_trigger():
-    """The PLC callback should call cameras.trigger(name) when val=True."""
+def test_rising_edge_fires_camera_snap():
+    """The PLC callback should call cameras.snap(name, source=...) when val=True."""
     pub, cameras, plc = _make()
     captured_callbacks = []
     plc.subscribe.side_effect = lambda alias, cb, **_kw: (
@@ -61,7 +61,7 @@ def test_rising_edge_fires_camera_trigger():
     # Find the entry callback and fire it with True
     entry_cb = next(cb for a, cb in captured_callbacks if a == "camera.snap_entry")
     entry_cb("camera.snap_entry", True)
-    cameras.trigger.assert_called_with("entry")
+    cameras.snap.assert_called_with("entry", source="trigger:entry")
 
 
 def test_falling_edge_does_nothing():
@@ -75,7 +75,7 @@ def test_falling_edge_does_nothing():
 
     entry_cb = next(cb for a, cb in captured if a == "camera.snap_entry")
     entry_cb("camera.snap_entry", False)
-    cameras.trigger.assert_not_called()
+    cameras.snap.assert_not_called()
 
 
 def test_each_callback_binds_its_own_camera():
@@ -91,7 +91,7 @@ def test_each_callback_binds_its_own_camera():
         cb(alias, True)
 
     # Both cameras should have been triggered exactly once each.
-    triggered = [c.args[0] for c in cameras.trigger.call_args_list]
+    triggered = [c.args[0] for c in cameras.snap.call_args_list]
     assert sorted(triggered) == ["entry", "exit"]
 
 

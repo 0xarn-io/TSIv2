@@ -11,30 +11,44 @@ Two ways to use it from Main.py:
 
 Add [robot] to app_config.toml to enable; omit to skip the module
 entirely.
+
+HTTP / session lives in `rws_client.RWSClient`; this module owns the
+domain-specific polling + state caching.
 """
 from __future__ import annotations
 
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-import requests
-import urllib3
-from requests.auth import HTTPBasicAuth
+from robot_variables import RobotVariableConfig
+from rws_client      import RWSClient
 
 log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class RobotConfig:
-    ip:         str
-    username:   str  = "Admin"
-    password:   str  = "robotics"
-    verify_ssl: bool = False
-    poll_ms:    int  = 2000
-    timeout_s:  float = 2.0
+    ip:                  str
+    username:            str  = "Admin"
+    password:            str  = "robotics"
+    verify_ssl:          bool = False
+    poll_ms:             int  = 2000
+    timeout_s:           float = 2.0
+    # Elog mirror — set elog_poll_ms = 0 to disable.
+    elog_poll_ms:        int  = 5000
+    elog_domain:         int  = 0
+    elog_limit:          int  = 50
+    elog_include_info:   bool = False
+    # Master arrays mirror — set master_poll_ms = 0 to disable.
+    master_poll_ms:      int  = 2000
+    master_task:         str  = "T_ROB1"
+    master_module:       str  = "Stations"
+    master_symbol:       str  = "Master"
+    master_dims_symbol:  str  = "Master_Dimmensions"
+    vars:                tuple[RobotVariableConfig, ...] = field(default_factory=tuple)
 
 
 @dataclass
@@ -76,9 +90,10 @@ class RobotStatus:
 class RobotMonitor:
     """Polls ABB RWS status in a background thread; publishes via callbacks."""
 
-    def __init__(self, cfg: RobotConfig):
+    def __init__(self, cfg: RobotConfig, *, client: RWSClient | None = None):
         self.cfg = cfg
-        self._session = self._make_session()
+        # Allow tests + Main.py to share a single RWSClient across modules.
+        self.client = client or RWSClient(cfg)
         self._status = RobotStatus()
         self._lock = threading.Lock()
         self._stop: threading.Event | None = None
@@ -145,15 +160,6 @@ class RobotMonitor:
 
     # ---- internals ----
 
-    def _make_session(self) -> requests.Session:
-        if not self.cfg.verify_ssl:
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        s = requests.Session()
-        s.auth   = HTTPBasicAuth(self.cfg.username, self.cfg.password)
-        s.verify = self.cfg.verify_ssl
-        s.headers.update({"Accept": "application/hal+json;v=2.0"})
-        return s
-
     def _run(self) -> None:
         period_s = self.cfg.poll_ms / 1000.0
         while not self._stop.wait(period_s):
@@ -199,24 +205,13 @@ class RobotMonitor:
                 except Exception as e:
                     log.warning("robot on_change cb failed: %s", e)
 
+    # GET helpers — kept as instance methods (preserved patch targets in tests)
+    # but delegate to the shared RWSClient. _get_first walks via self._get so
+    # callers (and tests) that patch m._get still see all variants.
     def _get(self, path: str, params=None, silent: bool = False) -> Optional[dict]:
-        try:
-            r = self._session.get(
-                f"https://{self.cfg.ip}{path}",
-                params=params,
-                timeout=self.cfg.timeout_s,
-            )
-            if r.status_code == 200:
-                return r.json()
-            if not silent:
-                log.warning("RWS GET %s -> %s", path, r.status_code)
-        except Exception as e:
-            if not silent:
-                log.warning("RWS GET %s failed: %s", path, e)
-        return None
+        return self.client.get(path, params=params, silent=silent)
 
     def _get_first(self, *paths: str, params=None) -> Optional[dict]:
-        """Try paths in order, return the first 200. Warn only if all fail."""
         for p in paths:
             obj = self._get(p, params=params, silent=True)
             if obj is not None:

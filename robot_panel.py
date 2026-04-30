@@ -36,8 +36,9 @@ class RobotPanel:
             self._render_summary_card()
             self._render_flags_card()
             self._render_raw_card()
+            # Parent the timer to this column so it dies with the page.
+            self._timer = ui.timer(_REFRESH_INTERVAL_S, self._refresh)
         self._refresh()
-        self._timer = ui.timer(_REFRESH_INTERVAL_S, self._refresh)
 
     # ---- summary (big readiness state) --------------------------------------
 

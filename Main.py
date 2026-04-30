@@ -31,14 +31,35 @@ logging.basicConfig(
 )
 logging.getLogger("watchfiles").setLevel(logging.WARNING)
 
+
+# NiceGUI's Timer task can fire one extra tick after its parent slot
+# is torn down (race during page navigation), then logs the resulting
+# RuntimeError + traceback. The error is cosmetic — the task is already
+# disposed. Drop it so the console isn't spammed.
+class _DropParentSlotDeletedFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if "parent slot of the element has been deleted" in record.getMessage():
+            return False
+        if record.exc_info and record.exc_info[1] is not None:
+            if "parent slot" in str(record.exc_info[1]):
+                return False
+        return True
+
+
+for _name in ("", "nicegui", "nicegui.background_tasks"):
+    logging.getLogger(_name).addFilter(_DropParentSlotDeletedFilter())
+
 from camera_panel     import CameraManager
 from camera_publisher import CameraPublisher
 from config           import AppConfig
 from dashboard        import Dashboard
 from db_orchestrator  import DBOrchestrator
 from plc_heartbeat    import PLCHeartbeat
+from robot_errors     import RobotElogPoller
+from robot_master     import RobotMasterMonitor
 from robot_publisher  import RobotPublisher
 from robot_status     import RobotMonitor
+from robot_variables  import RobotVariablesMonitor
 from sick_bridge      import SickBridge
 from sick_publisher   import SickPublisher
 from snapshot_archive import SnapshotArchive
@@ -65,6 +86,34 @@ robot_pub = (RobotPublisher(robot, plc, cfg.plc.robot_status)
 db        = DBOrchestrator.from_config(
     cfg, plc=plc, bridge=bridge, archive=archive,
 )
+robot_vars = (
+    RobotVariablesMonitor(
+        robot.client, list(cfg.robot.vars),
+        errors_store=db.errors, plc=plc,
+    )
+    if robot and cfg.robot and cfg.robot.vars else None
+)
+robot_elog = (
+    RobotElogPoller(
+        robot, db.errors,
+        poll_ms      = cfg.robot.elog_poll_ms,
+        domain       = cfg.robot.elog_domain,
+        limit        = cfg.robot.elog_limit,
+        include_info = cfg.robot.elog_include_info,
+    )
+    if robot and db.errors and cfg.robot and cfg.robot.elog_poll_ms > 0 else None
+)
+robot_master = (
+    RobotMasterMonitor(
+        robot.client, db.sizes,
+        task          = cfg.robot.master_task,
+        module        = cfg.robot.master_module,
+        master_symbol = cfg.robot.master_symbol,
+        dims_symbol   = cfg.robot.master_dims_symbol,
+        poll_ms       = cfg.robot.master_poll_ms,
+    )
+    if robot and db.sizes and cfg.robot and cfg.robot.master_poll_ms > 0 else None
+)
 
 
 # ─── ui ──────────────────────────────────────────────────────────────────────
@@ -74,12 +123,13 @@ db        = DBOrchestrator.from_config(
 app.add_static_files("/static", str(Path(__file__).with_name("static")))
 
 dashboard = Dashboard.build(
-    cameras       = cameras,
-    robot_monitor = robot,
-    recipes_store = db.recipes,
-    sizes_store   = db.sizes,
-    errors_store  = db.errors,
-    title         = cfg.ui.title,
+    cameras            = cameras,
+    robot_monitor      = robot,
+    robot_vars_monitor = robot_vars,
+    recipes_store      = db.recipes,
+    sizes_store        = db.sizes,
+    errors_store       = db.errors,
+    title              = cfg.ui.title,
 )
 dashboard.register_routes()
 
@@ -88,27 +138,38 @@ dashboard.register_routes()
 
 @app.on_startup
 def _startup() -> None:
+    # Cameras need the running asyncio loop so PLC callbacks (on the
+    # AmsRouter thread) can schedule snapshots cross-thread. on_startup
+    # runs inside the NiceGUI loop, so get_event_loop() returns it.
+    import asyncio
+    cameras.attach_loop(asyncio.get_event_loop())
     plc.open()
-    if archive:   archive.start()        # one-shot prune
+    if archive:    archive.start()        # one-shot prune
     bridge.start()
     publisher.start()
     cam_pub.start()
-    if heartbeat: heartbeat.start()
-    if robot:     robot.start()
-    if robot_pub: robot_pub.start()
+    if heartbeat:  heartbeat.start()
+    if robot:      robot.start()
+    if robot_pub:  robot_pub.start()
     db.start()
+    if robot_vars:   robot_vars.start()     # depends on db.errors being open
+    if robot_elog:   robot_elog.start()     # mirror RWS event log into errors_store
+    if robot_master: robot_master.start()   # mirror Master arrays ↔ sizes DB
 
 
 @app.on_shutdown
 def _shutdown() -> None:
+    if robot_master: robot_master.stop()
+    if robot_elog:   robot_elog.stop()
+    if robot_vars:   robot_vars.stop()
     db.stop()
-    if robot_pub: robot_pub.stop()
-    if robot:     robot.stop()
-    if heartbeat: heartbeat.stop()
+    if robot_pub:  robot_pub.stop()
+    if robot:      robot.stop()
+    if heartbeat:  heartbeat.stop()
     cam_pub.stop()
     publisher.stop()
     bridge.stop()
-    if archive:   archive.stop()
+    if archive:    archive.stop()
     plc.close()
 
 

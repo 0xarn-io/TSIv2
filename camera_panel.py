@@ -1,20 +1,27 @@
-"""camera_panel.py — NiceGUI camera panels with bool-triggered snapshots.
+"""camera_panel.py — NiceGUI camera panels with PLC-triggered snapshots.
 
 Usage in main.py:
     cameras = CameraManager.from_config(cfg.cameras, archive=archive)
+
+    @app.on_startup
+    def _startup():
+        cameras.attach_loop(asyncio.get_running_loop())
 
     @ui.page("/")
     def index():
         cameras.build()
 
-    # later, to snap from anywhere:
-    cameras.trigger("entry")
+    # Fire from any thread (e.g. PLC subscription callback):
+    cameras.snap("entry", source="trigger:entry")
 
 If `archive` is provided, every successful capture also persists the JPEG
-bytes to disk and forwards the path to `on_snapshot_done` callbacks.
+bytes to disk and forwards the path to `on_snapshot_done` callbacks. When
+no client is connected, captures still run and archive — only the live UI
+display is skipped.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from dataclasses import dataclass
@@ -33,22 +40,12 @@ class CameraConfig:
     rtsp_url: str
 
 
-@dataclass
-class CameraTrigger:
-    """Boolean trigger; set .value=True from anywhere to fire on next poll."""
-    value: bool = False
-
-    def fire(self) -> None:
-        self.value = True
-
-
 class CameraPanel:
-    """One camera panel: image + status + manual button + trigger flag."""
+    """One camera: capture pipeline + optional UI panel."""
 
     def __init__(self, config: CameraConfig, archive=None):
         self.config = config
         self.archive = archive
-        self.trigger = CameraTrigger()
         self._busy = False
         self._img:    Optional[ui.image] = None
         self._status: Optional[ui.label] = None
@@ -59,8 +56,8 @@ class CameraPanel:
     ) -> Callable[[], None]:
         """Register cb(camera_name, source, ok, path) called after every snapshot.
 
-        `path` is the saved-on-disk path (str) when an archive is configured
-        and the capture succeeded, else None.
+        Fires even when a snapshot was skipped (busy) or failed, so callers
+        relying on it for handshakes (e.g. clearing a PLC bool) always run.
         """
         self._done_cbs.append(cb)
         return lambda: self._done_cbs.remove(cb)
@@ -83,14 +80,21 @@ class CameraPanel:
         return self
 
     async def snapshot(self, source: str = "manual") -> None:
-        """Capture and display a snapshot. Safe to call concurrently."""
+        """Capture a snapshot. Always fires done_cbs, including on busy/fail.
+
+        Safe to call without a UI page open — capture + archive still run,
+        only the live display is skipped.
+        """
         if self._busy:
+            # Drop overlapping triggers, but still ack so the caller's
+            # handshake (e.g. PLC bool) doesn't stall.
+            self._fire_done(source, ok=False, path=None)
             return
         self._busy = True
         ok = False
         path: str | None = None
         try:
-            self._status.text = f"Capturing ({source})..."
+            self._set_status(f"Capturing ({source})...")
             jpeg_bytes = await run.io_bound(
                 capture_as_jpeg_bytes, self.config.rtsp_url,
             )
@@ -100,54 +104,76 @@ class CameraPanel:
                         path = self.archive.save(self.config.name, jpeg_bytes)
                     except Exception as e:
                         log.warning("snapshot archive save failed: %s", e)
-                data_url = (
-                    "data:image/jpeg;base64,"
-                    + base64.b64encode(jpeg_bytes).decode("ascii")
-                )
-                self._img.set_source(data_url)
+                self._set_image_from_bytes(jpeg_bytes)
                 kb = len(jpeg_bytes) // 1024
-                self._status.text = f"Captured via {source} ({kb} KB)"
+                self._set_status(f"Captured via {source} ({kb} KB)")
                 ok = True
             else:
-                self._status.text = f"Capture failed ({source})"
-                ui.notify(
+                self._set_status(f"Capture failed ({source})")
+                self._notify(
                     f"{self.config.name.capitalize()} camera capture failed",
-                    type="negative",
+                    "negative",
                 )
         finally:
             self._busy = False
-            for cb in list(self._done_cbs):
-                try:
-                    cb(self.config.name, source, ok, path)
-                except Exception as e:
-                    log.warning("snapshot done callback failed: %s", e)
+            self._fire_done(source, ok=ok, path=path)
+
+    # ---- UI-safe helpers (tolerate missing/destroyed elements) -------------
+
+    def _set_status(self, text: str) -> None:
+        if self._status is None:
+            return
+        try: self._status.text = text
+        except Exception as e: log.debug("camera status update skipped: %s", e)
+
+    def _set_image_from_bytes(self, jpeg_bytes: bytes) -> None:
+        if self._img is None:
+            return
+        try:
+            data_url = (
+                "data:image/jpeg;base64,"
+                + base64.b64encode(jpeg_bytes).decode("ascii")
+            )
+            self._img.set_source(data_url)
+        except Exception as e:
+            log.debug("camera image update skipped: %s", e)
+
+    def _notify(self, message: str, kind: str) -> None:
+        try:
+            ui.notify(message, type=kind)
+        except Exception as e:
+            log.debug("camera notify skipped: %s", e)
+
+    def _fire_done(self, source: str, *, ok: bool, path: str | None) -> None:
+        for cb in list(self._done_cbs):
+            try:
+                cb(self.config.name, source, ok, path)
+            except Exception as e:
+                log.warning("snapshot done callback failed: %s", e)
 
 
 class CameraManager:
-    """Manages multiple camera panels and polls their bool triggers."""
+    """Owns N CameraPanels + thread-safe `snap()` for PLC callbacks."""
 
-    def __init__(
-        self,
-        configs: list[CameraConfig],
-        poll_hz: float = 10.0,
-        archive=None,
-    ):
+    def __init__(self, configs: list[CameraConfig], archive=None):
         self.archive = archive
         self.panels: dict[str, CameraPanel] = {
             cfg.name: CameraPanel(cfg, archive=archive) for cfg in configs
         }
-        self.poll_hz = poll_hz
-        self._poll_timer = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     @classmethod
     def from_config(
-        cls, configs: list[CameraConfig], poll_hz: float = 10.0, *,
-        archive=None,
+        cls, configs: list[CameraConfig], *, archive=None,
     ) -> "CameraManager":
-        return cls(configs, poll_hz=poll_hz, archive=archive)
+        return cls(configs, archive=archive)
+
+    def attach_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Capture the main asyncio loop so cross-thread snaps can schedule."""
+        self._loop = loop
 
     def build(self) -> "CameraManager":
-        """Build all panels + Snap-All button + polling timer. Call in a page."""
+        """Build all panels + Snap-All button. Call inside a @ui.page function."""
         with ui.row().classes("gap-4"):
             for panel in self.panels.values():
                 panel.build()
@@ -159,34 +185,22 @@ class CameraManager:
         ui.button("Snap All", on_click=snap_all).props(
             "icon=photo_library color=primary"
         )
-        self._start_polling()
         return self
 
-    def trigger(self, name: str) -> None:
-        """Fire a snapshot trigger by camera name."""
-        if name in self.panels:
-            self.panels[name].trigger.fire()
+    def snap(self, name: str, source: str = "trigger") -> bool:
+        """Schedule a snapshot from any thread. Returns False if not dispatched.
 
-    def get_trigger(self, name: str) -> CameraTrigger:
-        """Direct reference to a camera's trigger bool."""
-        return self.panels[name].trigger
-
-    # ---- internals ----
-
-    def _start_polling(self) -> None:
-        """Watch each trigger and fire snapshots on the rising edge."""
-        last_state = {name: False for name in self.panels}
-
-        def poll():
-            for name, panel in self.panels.items():
-                current = panel.trigger.value
-                if current and not last_state[name]:
-                    panel.trigger.value = False  # auto-reset
-                    ui.timer(
-                        0,
-                        lambda n=name: self.panels[n].snapshot(f"trigger:{n}"),
-                        once=True,
-                    )
-                last_state[name] = current
-
-        self._poll_timer = ui.timer(1.0 / self.poll_hz, poll)
+        Used by `camera_publisher.CameraPublisher` when a PLC bool rises.
+        Captures a Future on the main asyncio loop; doesn't wait for it.
+        """
+        panel = self.panels.get(name)
+        if panel is None:
+            log.warning("camera snap: unknown camera %r", name)
+            return False
+        if self._loop is None or not self._loop.is_running():
+            log.warning(
+                "camera snap %s: event loop not attached yet — dropped", name,
+            )
+            return False
+        asyncio.run_coroutine_threadsafe(panel.snapshot(source), self._loop)
+        return True
