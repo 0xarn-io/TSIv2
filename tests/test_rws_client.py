@@ -64,11 +64,11 @@ def test_read_rapid_url_and_value():
     )
     out = c.read_rapid("T_ROB1", "MainModule", "n")
     assert out == "5"
-    # Per RWS RAPID Service docs: /rw/rapid/symbol/data/RAPID/<scope>/<sym>
-    # with ?json=1 to force the JSON response shape.
+    # OmniCore RWS path: encoded symbol URI + /data subresource, with
+    # ?json=1 + Accept override (the data subresource refuses hal+json).
     call = sess.get.call_args
     assert call.args[0] == (
-        "https://1.2.3.4/rw/rapid/symbol/data/RAPID/T_ROB1/MainModule/n"
+        "https://1.2.3.4/rw/rapid/symbol/RAPID%2FT_ROB1%2FMainModule%2Fn/data"
     )
     assert call.kwargs["params"] == {"json": "1"}
     assert call.kwargs["headers"] == {"Accept": "application/json"}
@@ -93,7 +93,7 @@ def test_write_rapid_acquires_and_releases_mastership():
     paths = [(url, p.get("action")) for url, p in calls]
     assert paths[0]  == ("https://1.2.3.4/rw/mastership/edit", "request")
     assert paths[1]  == (
-        "https://1.2.3.4/rw/rapid/symbol/data/RAPID/T_ROB1/MainModule/n",
+        "https://1.2.3.4/rw/rapid/symbol/RAPID%2FT_ROB1%2FMainModule%2Fn/data",
         "set",
     )
     assert paths[-1] == ("https://1.2.3.4/rw/mastership/edit", "release")

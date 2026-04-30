@@ -104,23 +104,38 @@ class RWSClient:
     # ---- RAPID symbol convenience ------------------------------------------
 
     @staticmethod
-    def _rapid_path(task: str, module: str, symbol: str) -> str:
-        """Per the RWS RAPID Service docs:
-            /rw/rapid/symbol/data/RAPID/<task>/<module>/<symbol>
+    def _rapid_symbol_uri(task: str, module: str, symbol: str) -> str:
+        """URL-encoded RAPID symbol URI used as a single path segment on
+        OmniCore RWS:
+
+            /rw/rapid/symbol/RAPID%2FT_ROB1%2FStations%2FMaster/data
+                              └────── symbol uri ──────┘ subresource
+
+        The IRC5 / older RWS form (`/rw/rapid/symbol/data/RAPID/...`) is
+        not valid on OmniCore firmwares — it returns 404.
         """
-        return f"/rw/rapid/symbol/data/RAPID/{task}/{module}/{symbol}"
+        return f"RAPID%2F{task}%2F{module}%2F{symbol}"
+
+    @staticmethod
+    def _rapid_path(task: str, module: str, symbol: str,
+                    subresource: str = "data") -> str:
+        return (
+            "/rw/rapid/symbol/"
+            + RWSClient._rapid_symbol_uri(task, module, symbol)
+            + "/" + subresource
+        )
 
     def read_rapid(
         self, task: str, module: str, symbol: str,
     ) -> Optional[str]:
         """Read a RAPID symbol's raw value string. Returns None on failure.
 
-        The data subresource serves XML by default and won't honour
-        `application/hal+json;v=2.0` (which `properties` does); ask for
-        plain JSON via `?json=1` and override Accept accordingly.
+        The /data subresource won't honour `application/hal+json;v=2.0`
+        even though /properties does — ask for plain JSON via `?json=1`
+        and override Accept on this call only.
         """
         obj = self.get(
-            self._rapid_path(task, module, symbol),
+            self._rapid_path(task, module, symbol, "data"),
             params={"json": "1"},
             accept="application/json",
         )
@@ -131,16 +146,12 @@ class RWSClient:
     def write_rapid(
         self, task: str, module: str, symbol: str, value: str,
     ) -> bool:
-        """Write a RAPID symbol value. Acquires + releases mastership.
-
-        `value` is the RAPID-formatted string (e.g. "42", "TRUE",
-        "\"hello\""). Returns True on a successful write.
-        """
+        """Write a RAPID symbol value. Acquires + releases mastership."""
         if not self._mastership("request"):
             return False
         try:
             r = self.post(
-                self._rapid_path(task, module, symbol),
+                self._rapid_path(task, module, symbol, "data"),
                 params={"action": "set"},
                 data={"value": value},
             )
