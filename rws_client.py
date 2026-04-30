@@ -296,12 +296,18 @@ def _extract_rapid_value(obj: dict) -> Optional[str]:
     Older shapes have surfaced under `_embedded._state[0].value` and
     `_embedded.resources[0].value`; check all three.
     """
-    # Top-level `state` (current OmniCore shape).
     state = obj.get("state")
-    if isinstance(state, list) and state and isinstance(state[0], dict):
-        v = state[0].get("value")
-        if v is not None:
-            return str(v)
+    if isinstance(state, list) and state:
+        # Per OmniCore SDK: walk for the rap-data entry, then take .value.
+        for item in state:
+            if not isinstance(item, dict):
+                continue
+            if item.get("_type") == "rap-data" and "value" in item:
+                return str(item["value"])
+        # Fall back: any state entry that has a `value` key.
+        for item in state:
+            if isinstance(item, dict) and "value" in item:
+                return str(item["value"])
 
     embedded = obj.get("_embedded") or {}
     for key in ("_state", "state", "resources"):
@@ -314,8 +320,9 @@ def _extract_rapid_value(obj: dict) -> Optional[str]:
         return str(obj["value"])
 
     log.warning(
-        "RAPID value not found; response keys=%s embedded keys=%s",
-        list(obj.keys()),
+        "RAPID value not found. state=%s _embedded keys=%s top-level keys=%s",
+        state,
         list(embedded.keys()) if isinstance(embedded, dict) else None,
+        list(obj.keys()),
     )
     return None
