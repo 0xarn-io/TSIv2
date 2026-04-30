@@ -152,16 +152,68 @@ class RWSClient:
     def read_rapid_array(
         self, task: str, module: str, symbol: str,
     ) -> Any | None:
-        """Read a RAPID array symbol; returns a nested Python list."""
+        """Read a RAPID array symbol; returns a nested Python list.
+
+        Tries the bulk /data endpoint first. Some controllers refuse to
+        serve large arrays in one shot (error -1073445865 — "data too
+        large") — in that case, fall back to per-element reads via the
+        Symbol{N}/data syntax used by the OmniCore SDK's fetchByItem.
+        """
         raw = self.read_rapid(task, module, symbol)
-        if raw is None:
-            return None
-        try:
-            return parse_rapid_array(raw)
-        except Exception as e:
-            log.warning("RAPID array parse failed for %s/%s/%s: %s",
-                        task, module, symbol, e)
-            return None
+        if raw is not None:
+            try:
+                return parse_rapid_array(raw)
+            except Exception as e:
+                log.warning("RAPID array parse failed for %s/%s/%s: %s",
+                            task, module, symbol, e)
+                return None
+        # Bulk fetch returned nothing — try per-element.
+        return self._read_rapid_array_by_item(task, module, symbol)
+
+    def read_rapid_array_by_index(
+        self, task: str, module: str, symbol: str, count: int,
+    ) -> Any | None:
+        """Read array elements 1..count one at a time via Symbol{N}/data.
+
+        Useful when the caller knows the array size up front and wants to
+        skip the bulk-fetch attempt.
+        """
+        return self._read_rapid_array_by_item(task, module, symbol, count)
+
+    def _read_rapid_array_by_item(
+        self, task: str, module: str, symbol: str, count: int | None = None,
+    ) -> list | None:
+        """Iterate Symbol{1}, Symbol{2}, … reading one row each cycle.
+
+        If `count` is None, walk until an item read returns None — the
+        controller signals the end-of-array that way.
+        """
+        out: list = []
+        max_n = count if count is not None else 1024
+        for n in range(1, max_n + 1):
+            path = (
+                f"/rw/rapid/symbol/RAPID/{task}/{module}/{symbol}"
+                f"%7B{n}%7D/data"
+            )
+            obj = self.get(path, silent=count is None)
+            if obj is None:
+                if count is None:
+                    return out if out else None
+                return None
+            raw = _extract_rapid_value(obj)
+            if raw is None:
+                if count is None:
+                    return out if out else None
+                return None
+            try:
+                out.append(parse_rapid_array(raw))
+            except Exception as e:
+                log.warning(
+                    "RAPID per-item parse failed %s/%s/%s{%d}: %s",
+                    task, module, symbol, n, e,
+                )
+                return None
+        return out
 
     def write_rapid_array(
         self, task: str, module: str, symbol: str, value: Any,

@@ -18,7 +18,7 @@ def _store(tmp_path: Path) -> SizesStore:
 
 def _client(master=None, dims=None) -> MagicMock:
     c = MagicMock()
-    c.read_rapid_array.side_effect = lambda task, mod, sym: (
+    c.read_rapid_array_by_index.side_effect = lambda task, mod, sym, count: (
         master if sym == "Master" else dims
     )
     c.write_rapid_array.return_value = True
@@ -87,7 +87,7 @@ def test_inbound_clears_slot_when_robot_empties(tmp_path: Path):
         m._poll_once()
         assert sizes.get_slot(0) is not None
         # Robot empties slot 0 in next snapshot.
-        client.read_rapid_array.side_effect = lambda task, mod, sym: (
+        client.read_rapid_array_by_index.side_effect = lambda task, mod, sym, count: (
             [[""]] * 20 if sym == "Master" else [[0, 0, 0]] * 20
         )
         m._poll_once()
@@ -105,7 +105,7 @@ def test_inbound_moves_row_when_wood_flag_flips(tmp_path: Path):
         m._poll_once()
         assert sizes.get_slot(0)[0] == "cardboard"
         # Robot flips wood=1.
-        client.read_rapid_array.side_effect = lambda task, mod, sym: (
+        client.read_rapid_array_by_index.side_effect = lambda task, mod, sym, count: (
             [["X"]] + [[""]] * 19 if sym == "Master"
             else [[100, 200, 1]] + [[0, 0, 0]] * 19
         )

@@ -138,11 +138,14 @@ class RobotMasterMonitor:
             log.info("robot master: %d slot(s) synced from controller", changed)
 
     def _read_robot(self) -> list[_Slot] | None:
-        master = self.client.read_rapid_array(
-            self.task, self.module, self.master_symbol,
+        # The bulk /data endpoint refuses these arrays on OmniCore (large
+        # data); use the per-item Symbol{N}/data path with an explicit
+        # SLOT_COUNT so we don't pay the bulk-attempt round-trip every poll.
+        master = self.client.read_rapid_array_by_index(
+            self.task, self.module, self.master_symbol, SLOT_COUNT,
         )
-        dims = self.client.read_rapid_array(
-            self.task, self.module, self.dims_symbol,
+        dims = self.client.read_rapid_array_by_index(
+            self.task, self.module, self.dims_symbol, SLOT_COUNT,
         )
         if master is None:
             log.warning("robot master: %s/%s/%s read returned None",
