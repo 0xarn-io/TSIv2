@@ -131,25 +131,36 @@ class AppConfig:
 def _load_robot(d: dict | None, base: Path) -> RobotConfig | None:
     """[robot] section.
 
-    The variable list is loaded from a separate file pointed at by
-    `vars_file` (path is resolved relative to app_config.toml). Inline
-    `[[robot.vars]]` blocks are still honored as a legacy escape hatch.
+    The RAPID-symbol-pointing fields (master mirror + [[vars]] list) live
+    in a sibling file pointed at by `vars_file` so app_config.toml stays
+    focused on connection + behavior knobs. Inline `[[robot.vars]]` blocks
+    and `master_*` keys on [robot] are still honored as a legacy escape
+    hatch.
     """
     if not d:
         return None
 
-    # vars_file (preferred) — load [[vars]] entries from a sibling TOML.
-    vars_file = d.get("vars_file")
     raw_vars: list[dict] = []
+    master_overrides: dict[str, object] = {}
+
+    # vars_file (preferred) — load [master] + [[vars]] from a sibling TOML.
+    vars_file = d.get("vars_file")
     if vars_file:
         p = (base / vars_file).resolve()
         if p.is_file():
             with p.open("rb") as f:
-                raw_vars = list(tomllib.load(f).get("vars", []))
+                vf = tomllib.load(f)
+            raw_vars = list(vf.get("vars", []))
+            for k, v in (vf.get("master") or {}).items():
+                # robot_vars.toml uses unprefixed keys inside [master];
+                # map them onto the prefixed RobotConfig fields.
+                master_overrides[f"master_{k}"] = v
+
     # Legacy: inline [[robot.vars]] blocks.
     raw_vars += list(d.get("vars", []))
 
     fields = {k: v for k, v in d.items() if k not in ("vars", "vars_file")}
+    fields.update(master_overrides)             # sibling file wins
     vars_tuple = tuple(
         RobotVariableConfig(
             **{

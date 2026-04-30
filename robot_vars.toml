@@ -1,13 +1,29 @@
 # Robot RAPID variables exposed via RWS.
 #
-# Each [[vars]] entry is polled at its own poll_ms cadence and routed to the
-# listed targets:
+# Two sections:
+#   [master]    — the dedicated two-way mirror of the controller's Master /
+#                 Master_Dimmensions arrays into the sizes DB.
+#   [[vars]]    — a declarative list of arbitrary RAPID symbols to read
+#                 (and optionally write) on a per-entry cadence.
+
+# ---- Master arrays mirror ---------------------------------------------------
+# Set poll_ms = 0 to disable the master mirror entirely.
+[master]
+poll_ms     = 8000
+task        = "T_ROB1"
+module      = "Stations"
+symbol      = "Master"
+dims_symbol = "Master_Dimmensions"
+
+# ---- Free-form variables ----------------------------------------------------
+# Each [[vars]] entry is polled at its own poll_ms and routed to the listed
+# targets:
 #   "ui"   — shown live on the /vars tab
 #   "log"  — appended to errors_log on every observed change (severity=info)
 #   "plc"  — mirrored to the named TwinCAT alias on every observed change
 #            (requires `plc_alias` matching an entry in plc_signals.toml)
 #
-# Comment all of them out (or delete this file) to disable the Vars tab.
+# Comment all of them out to disable the Vars tab.
 
 [[vars]]
 alias    = "Cycle_counter"
@@ -15,7 +31,7 @@ task     = "T_ROB1"
 module   = "Main_Flow"
 symbol   = "Cycle_counter"
 type     = "num"           # num | bool | string
-mode     = "r"            # r | rw
+mode     = "r"             # r | rw
 poll_ms  = 1000
 targets  = ["ui"]
 #

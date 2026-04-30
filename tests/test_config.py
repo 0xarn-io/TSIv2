@@ -187,6 +187,52 @@ vars_file = "robot_vars.toml"
     assert cfg.robot.vars[1].targets == ("ui", "log")
 
 
+def test_robot_master_section_overrides_defaults(tmp_path: Path, signals_toml: Path):
+    """The [master] block in robot_vars.toml feeds the RobotConfig
+    master_* fields without touching app_config.toml."""
+    vars_path = tmp_path / "robot_vars.toml"
+    vars_path.write_text("""
+[master]
+poll_ms     = 3500
+task        = "T_ROB2"
+module      = "Stations_X"
+symbol      = "MyMaster"
+dims_symbol = "MyMaster_Dims"
+""")
+    p = tmp_path / "with_master.toml"
+    p.write_text(f"""
+[plc]
+vars_file = "{signals_toml.name}"
+[plc.publisher]
+event_alias = "sick.event"
+live_alias = "sick.live"
+enable_alias = "sick.enable"
+[scanner]
+udp_port_a = 2111
+udp_port_b = 2112
+separation_m = 2.45
+belt_speed_mps = 0.254
+belt_y = -1.48
+[ui]
+refresh_hz = 10.0
+host = "0.0.0.0"
+port = 8080
+title = "Test"
+[[cameras]]
+name = "x"
+url = "rtsp://x"
+[robot]
+ip = "1.2.3.4"
+vars_file = "robot_vars.toml"
+""")
+    cfg = AppConfig.load(p)
+    assert cfg.robot.master_poll_ms == 3500
+    assert cfg.robot.master_task == "T_ROB2"
+    assert cfg.robot.master_module == "Stations_X"
+    assert cfg.robot.master_symbol == "MyMaster"
+    assert cfg.robot.master_dims_symbol == "MyMaster_Dims"
+
+
 def test_robot_vars_file_missing_yields_empty_list(tmp_path: Path, signals_toml: Path):
     """A non-existent vars_file is treated as no entries (Vars tab silently absent)."""
     p = tmp_path / "ghost_vars.toml"
