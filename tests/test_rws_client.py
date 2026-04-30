@@ -79,33 +79,41 @@ def test_read_rapid_failure_returns_none():
 
 # ---- write_rapid ------------------------------------------------------------
 
-def test_write_rapid_acquires_and_releases_mastership():
+def test_write_rapid_succeeds_without_mastership_when_direct_write_ok():
+    """OmniCore in AUTO mode usually allows the write directly — no master."""
     calls: list[tuple[str, str | None]] = []
     def post(url, params=None, data=None, headers=None, timeout=None):
-        # action may live in either params or data depending on which
-        # mastership URI shape we ended up using.
         action = (params or {}).get("action") or (data or {}).get("action")
         calls.append((url, action))
         return _ok()
     c, _ = _client_with_mock_session(post=post)
 
     assert c.write_rapid("T_ROB1", "MainModule", "n", "42") is True
-
-    # First POST acquires mastership (some flavour of /rw/mastership[/edit]).
-    assert "rw/mastership" in calls[0][0]
-    assert calls[0][1] == "request"
-    # Then the data POST.
-    assert calls[1] == (
-        "https://1.2.3.4/rw/rapid/symbol/RAPID/T_ROB1/MainModule/n/data",
-        None,
-    )
-    # Finally, release on the same URI we locked onto.
-    assert calls[-1][0] == calls[0][0]
-    assert calls[-1][1] == "release"
+    # Single POST: data path. No mastership round-trip.
+    assert calls == [
+        ("https://1.2.3.4/rw/rapid/symbol/RAPID/T_ROB1/MainModule/n/data", None),
+    ]
 
 
-def test_write_rapid_releases_mastership_even_when_set_fails():
-    """Even if the data POST fails, mastership must still be released."""
+def test_write_rapid_falls_back_to_mastership_when_direct_fails():
+    """Direct write fails → acquire mastership, retry, release."""
+    posts: list[str] = []
+    def post(url, params=None, data=None, headers=None, timeout=None):
+        action = (params or {}).get("action") or (data or {}).get("action")
+        if "/rw/rapid/symbol/" in url:
+            posts.append("write")
+            # First write fails (no mastership), second succeeds.
+            return _ok(status=500, ok=False) if posts.count("write") == 1 else _ok()
+        posts.append(action)
+        return _ok()
+    c, _ = _client_with_mock_session(post=post)
+
+    assert c.write_rapid("T_ROB1", "Mod", "n", "1") is True
+    assert posts == ["write", "request", "write", "release"]
+
+
+def test_write_rapid_releases_mastership_even_when_retry_fails():
+    """Direct + retried write both fail → mastership must still be released."""
     posts: list[str] = []
     def post(url, params=None, data=None, headers=None, timeout=None):
         action = (params or {}).get("action") or (data or {}).get("action")
@@ -117,18 +125,26 @@ def test_write_rapid_releases_mastership_even_when_set_fails():
     c, _ = _client_with_mock_session(post=post)
 
     assert c.write_rapid("T_ROB1", "Mod", "n", "1") is False
-    assert posts == ["request", "write", "release"]
+    assert posts == ["write", "request", "write", "release"]
 
 
-def test_write_rapid_aborts_when_mastership_request_fails():
-    """Every mastership probe shape returns 403 → write must not run."""
+def test_write_rapid_returns_false_when_direct_and_mastership_unavailable():
+    """Direct write fails AND no mastership URI shape works → return False."""
+    posts: list[str] = []
     def post(url, params=None, data=None, headers=None, timeout=None):
         action = (params or {}).get("action") or (data or {}).get("action")
-        if "/rw/mastership" in url and action in ("request", "release"):
-            return _ok(status=403, ok=False)
-        pytest.fail(f"unexpected POST {url} (action={action})")
+        if "/rw/rapid/symbol/" in url:
+            posts.append("write")
+            return _ok(status=500, ok=False)
+        # All mastership probes 404.
+        posts.append(action)
+        return _ok(status=404, ok=False)
     c, _ = _client_with_mock_session(post=post)
+
     assert c.write_rapid("T_ROB1", "Mod", "n", "1") is False
+    # Exactly one write attempt; mastership probed (4 shapes) and never released.
+    assert posts.count("write") == 1
+    assert "release" not in posts
 
 
 # ---- RAPID array codec ------------------------------------------------------

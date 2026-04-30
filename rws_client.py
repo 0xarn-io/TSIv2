@@ -131,19 +131,38 @@ class RWSClient:
     def write_rapid(
         self, task: str, module: str, symbol: str, value: str,
     ) -> bool:
-        """Write a RAPID symbol value. Acquires + releases mastership.
+        """Write a RAPID symbol value.
 
-        OmniCore's POST `.../data` with `value=…` body suffices — no
-        `?action=set` query needed.
+        Strategy: try the data POST directly first. On OmniCore in AUTO
+        mode the configured RWS user typically has implicit edit
+        privilege, so the write succeeds without mastership. Only fall
+        back to acquire-then-retry if the direct write fails — and even
+        then, only if mastership probing actually finds a working URI
+        (some firmwares reject every shape we know).
         """
-        if not self._mastership("request"):
+        path = self._rapid_path(task, module, symbol, "data")
+        r = self.post(path, data={"value": value}, silent=True)
+        if r is not None and r.ok:
+            return True
+        if r is not None:
+            log.warning(
+                "rapid write %s -> %s %s",
+                path, r.status_code, (r.text or "")[:200].strip(),
+            )
+
+        # Direct write failed. Try acquire-master, retry, release.
+        if not self._mastership("request", silent=True):
             return False
         try:
-            r = self.post(
-                self._rapid_path(task, module, symbol, "data"),
-                data={"value": value},
-            )
-            return bool(r is not None and r.ok)
+            r2 = self.post(path, data={"value": value}, silent=True)
+            if r2 is not None and r2.ok:
+                return True
+            if r2 is not None:
+                log.warning(
+                    "rapid write (with master) %s -> %s %s",
+                    path, r2.status_code, (r2.text or "")[:200].strip(),
+                )
+            return False
         finally:
             self._mastership("release", silent=True)
 
