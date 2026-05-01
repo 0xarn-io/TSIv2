@@ -19,11 +19,18 @@ Mirroring rules:
     DB row added/updated      → push (name, w, l, station3) to that slot.
     DB row deleted            → write empty values to that slot.
 
-Loop-back guard: the monitor maintains a per-slot snapshot; robot polls
-that come back identical to the last value the monitor wrote are skipped,
-so a DB→robot push doesn't re-fire a robot→DB write of the same data.
-DB-side mutations done while applying an inbound robot snapshot are
-wrapped in `sizes.silent()` so on_change doesn't echo back to the robot.
+Loop-back guards:
+
+  * Cache check (both modes): the monitor maintains a per-slot snapshot
+    of what's on the robot. DB → robot pushes that match the cache are
+    skipped, and inbound polls that match the cache are also skipped.
+
+  * Origin filter (bus mode): inbound DB writes are tagged
+    origin="robot_master" so the bus subscriber can ignore its own
+    writes. No more silent() context manager needed.
+
+  * silent() context (legacy mode): on_change suppression keeps the
+    old direct-callback path identical to before bus mode existed.
 
 No nicegui import — strictly data layer.
 """
@@ -87,12 +94,20 @@ class RobotMasterMonitor:
 
         self._stop:   threading.Event   | None = None
         self._thread: threading.Thread  | None = None
-        self._unsub_db: callable | None = None
+        self._unsub_db:  callable | None = None
+        self._unsub_bus: callable | None = None
 
     # ---- lifecycle ----------------------------------------------------------
 
     def start(self) -> None:
-        self._unsub_db = self.sizes.on_change(self._on_db_change)
+        if self._bus is not None:
+            from events import signals
+            self._unsub_bus = self._bus.subscribe(
+                signals.sizes_changed, self._on_sizes_event, mode="thread",
+            )
+        else:
+            # Legacy direct-callback path (no bus). silent() suppresses echo.
+            self._unsub_db = self.sizes.on_change(self._on_db_change)
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._run, daemon=True, name="robot-master",
@@ -100,6 +115,10 @@ class RobotMasterMonitor:
         self._thread.start()
 
     def stop(self) -> None:
+        if self._unsub_bus is not None:
+            try: self._unsub_bus()
+            except Exception: pass
+            self._unsub_bus = None
         if self._unsub_db is not None:
             try: self._unsub_db()
             except Exception: pass
@@ -188,7 +207,32 @@ class RobotMasterMonitor:
         return slots
 
     def _apply_inbound(self, slot: int, robot: _Slot) -> None:
-        """Apply a single robot slot's value to the DB without echoing back."""
+        """Apply a single robot slot's value to the DB without echoing back.
+
+        Bus mode: tag the write origin="robot_master"; the bus subscriber
+        ignores its own writes. Legacy mode: wrap in silent() so on_change
+        doesn't fire and re-push back to the robot.
+        """
+        if self._bus is not None:
+            try:
+                if robot.empty:
+                    self.sizes.clear_slot(slot, origin="robot_master")
+                else:
+                    self.sizes.upsert_slot(
+                        slot,
+                        name      = robot.name,
+                        width_mm  = robot.width_mm,
+                        length_mm = robot.length_mm,
+                        station3  = robot.station3,
+                        origin    = "robot_master",
+                    )
+            except Exception as e:
+                log.warning(
+                    "robot master inbound apply failed slot=%d (%r): %s",
+                    slot, robot, e,
+                )
+            return
+
         with self.sizes.silent():
             try:
                 if robot.empty:
@@ -210,7 +254,7 @@ class RobotMasterMonitor:
     # ---- outbound (DB → robot) ---------------------------------------------
 
     def _on_db_change(self, ev: SizesChange) -> None:
-        """Handler for SizesStore.on_change; fires from the editing thread."""
+        """Handler for SizesStore.on_change (legacy mode); editing thread."""
         if ev.op == "delete":
             # Don't know the slot from the event payload — reconcile all
             # 20 slots against the current DB state. Cheap.
@@ -226,6 +270,30 @@ class RobotMasterMonitor:
         new_slot = _Slot(
             name=s.name, width_mm=int(s.width_mm),
             length_mm=int(s.length_mm), station3=bool(s.station3),
+        )
+        if self._last_robot[slot] == new_slot:
+            return
+        self._push_slot(slot, new_slot)
+
+    def _on_sizes_event(self, payload) -> None:
+        """Bus handler for SizesChanged. Filters out our own writes via origin."""
+        if payload.origin == "robot_master":
+            # Our own inbound apply — don't echo back to the robot.
+            return
+        if payload.op == "delete":
+            self._reconcile()
+            return
+        d = payload.payload
+        if d is None or d.get("slot") is None:
+            return
+        slot = int(d["slot"])
+        if not (0 <= slot < SLOT_COUNT):
+            return
+        new_slot = _Slot(
+            name=str(d.get("name", "")),
+            width_mm=int(d.get("width_mm", 0)),
+            length_mm=int(d.get("length_mm", 0)),
+            station3=bool(d.get("station3", False)),
         )
         if self._last_robot[slot] == new_slot:
             return
