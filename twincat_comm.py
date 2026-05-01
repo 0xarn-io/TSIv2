@@ -352,12 +352,28 @@ class TwinCATComm:
 
         Requires `bus` to be set on the TwinCATComm — without a bus, this
         is a no-op (the registration would publish to nowhere).
+
+        Connection-time ADS errors (PLC unreachable, missing routes) are
+        logged as warnings rather than raised. ensure_published is
+        declarative — callers say "I want events for this alias when the
+        PLC has them"; if the PLC isn't there yet, that intent is still
+        satisfied (no events, but no events is the correct answer).
+        Surfacing the error would force every caller to wrap the call,
+        and cascading the failure tears down startup of unrelated
+        components (UI, DB, robot).
         """
         if self._bus is None:
             return
         if alias in self._notifications:
             return
-        self.subscribe(
-            alias, lambda _a, _v: None,
-            cycle_time_ms=cycle_time_ms, on_change=True,
-        )
+        try:
+            self.subscribe(
+                alias, lambda _a, _v: None,
+                cycle_time_ms=cycle_time_ms, on_change=True,
+            )
+        except Exception as e:
+            log.warning(
+                "ensure_published(%s) failed (%s); no PLC events will be "
+                "published for this alias until the PLC is reachable",
+                alias, e,
+            )

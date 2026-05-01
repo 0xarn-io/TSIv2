@@ -115,18 +115,9 @@ class RecipePublisher:
     def _start_bus_mode(self) -> None:
         """Bus mode: ensure_published + alias-filtered bus subscription."""
         from events import signals
-        try:
-            self.plc.ensure_published(
-                self.cfg.code_alias, cycle_time_ms=self.cfg.cycle_ms,
-            )
-        except Exception as e:
-            log.warning(
-                "recipe code ensure_published failed (%s); recipe publisher "
-                "disabled until '%s' is available on the PLC",
-                e, self.cfg.code_alias,
-            )
-            return
-
+        self.plc.ensure_published(
+            self.cfg.code_alias, cycle_time_ms=self.cfg.cycle_ms,
+        )
         self._bus_unsub = self._bus.subscribe_filtered(
             signals.plc_signal_changed,
             lambda p: self._queue.put(int(p.value)),
