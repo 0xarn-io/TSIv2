@@ -133,25 +133,26 @@ class RWSClient:
     ) -> bool:
         """Write a RAPID symbol value.
 
-        Strategy: try the data POST directly first. On OmniCore in AUTO
-        mode the configured RWS user typically has implicit edit
-        privilege, so the write succeeds without mastership. Only fall
-        back to acquire-then-retry if the direct write fails — and even
-        then, only if mastership probing actually finds a working URI
-        (some firmwares reject every shape we know).
+        Strategy: try the data POST directly first. If the firmware grants
+        implicit edit privilege to the configured user, this succeeds and
+        we skip the mastership round-trip entirely. Otherwise it fails
+        with -4501 ("no master") and we fall back to acquire-retry-release.
+        Only the final outcome is logged — the optimistic 403 is expected
+        on firmwares that require explicit mastership (e.g. RW 7.21).
         """
         path = self._rapid_path(task, module, symbol, "data")
         r = self.post(path, data={"value": value}, silent=True)
         if r is not None and r.ok:
             return True
-        if r is not None:
-            log.warning(
-                "rapid write %s -> %s %s",
-                path, r.status_code, (r.text or "")[:200].strip(),
-            )
+        direct_err = (
+            None if r is None
+            else f"{r.status_code} {(r.text or '')[:200].strip()}"
+        )
 
-        # Direct write failed. Try acquire-master, retry, release.
+        # Direct write didn't go through. Try acquire-master, retry, release.
         if not self._mastership("request"):
+            if direct_err:
+                log.warning("rapid write %s -> %s", path, direct_err)
             return False
         try:
             r2 = self.post(path, data={"value": value}, silent=True)
@@ -162,6 +163,8 @@ class RWSClient:
                     "rapid write (with master) %s -> %s %s",
                     path, r2.status_code, (r2.text or "")[:200].strip(),
                 )
+            elif direct_err:
+                log.warning("rapid write %s -> %s", path, direct_err)
             return False
         finally:
             self._mastership("release", silent=True)
