@@ -74,6 +74,7 @@ class RobotVariablesMonitor:
         *,
         errors_store=None,
         plc=None,
+        bus=None,
     ):
         self.client = client
         self.vars: dict[str, RobotVariableConfig] = {v.alias: v for v in vars}
@@ -81,6 +82,7 @@ class RobotVariablesMonitor:
             raise ValueError("robot vars: duplicate alias")
         self._errors = errors_store
         self._plc = plc
+        self._bus = bus
 
         self._values:    dict[str, Any]   = {}        # last typed value
         self._last_poll: dict[str, float] = {}        # monotonic
@@ -180,6 +182,13 @@ class RobotVariablesMonitor:
         if prev == value:
             return
         self._dispatch(cfg, prev, value)
+        if self._bus is not None:
+            from events import RobotVarChanged, signals
+            self._bus.publish(signals.robot_var_changed, RobotVarChanged(
+                alias=cfg.alias,
+                value=value,
+                prev=(None if prev is _MISSING else prev),
+            ))
 
     def _dispatch(self, cfg: RobotVariableConfig, prev: Any, value: Any) -> None:
         if "ui" in cfg.targets:

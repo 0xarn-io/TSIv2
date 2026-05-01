@@ -91,7 +91,11 @@ class Dashboard:
         sizes_store:        SizesStore             | None = None,
         errors_store:       ErrorsStore            | None = None,
         title:              str = "TSI Gen 1.5",
+        bus                                        = None,
     ) -> "Dashboard":
+        # `bus` is accepted now so panels can subscribe to bus events as
+        # they're migrated. Currently each panel still pulls from its
+        # store/monitor on a UI timer.
         return cls(
             cameras    = cameras,
             robot      = RobotPanel(robot_monitor)         if robot_monitor      else None,

@@ -70,6 +70,7 @@ class RobotMasterMonitor:
         master_symbol:  str = "Master",
         dims_symbol:    str = "Master_Dimmensions",
         poll_ms:        int = 2000,
+        bus=None,
     ):
         self.client       = client
         self.sizes        = sizes
@@ -78,6 +79,7 @@ class RobotMasterMonitor:
         self.master_symbol = master_symbol
         self.dims_symbol  = dims_symbol
         self.poll_ms      = int(poll_ms)
+        self._bus         = bus
 
         # Last value we wrote (or last value we observed from the robot).
         # Lets us suppress no-op pushes and ignore loop-back reads.
@@ -133,6 +135,15 @@ class RobotMasterMonitor:
             changed += 1
         if changed:
             log.info("robot master: %d slot(s) synced from controller", changed)
+            if self._bus is not None:
+                from events import MasterArrayChanged, signals
+                self._bus.publish(signals.master_array_changed,
+                                  MasterArrayChanged(slots=[
+                                      {"name": s.name, "width_mm": s.width_mm,
+                                       "length_mm": s.length_mm,
+                                       "station3": s.station3}
+                                      for s in slots
+                                  ]))
 
     def _read_robot(self) -> list[_Slot] | None:
         # The bulk /data endpoint refuses these arrays on OmniCore (large

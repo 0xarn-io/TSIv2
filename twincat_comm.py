@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import time
 import tomllib
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -175,15 +176,16 @@ class TwinCATConfig:
 class TwinCATComm:
     """pyads.Connection wrapper driven by a TOML var list. Supports UDTs."""
 
-    def __init__(self, config: TwinCATConfig):
+    def __init__(self, config: TwinCATConfig, *, bus=None):
         self.config = config
+        self._bus   = bus
         self._conn = pyads.Connection(config.net_id, config.port)
         # alias -> (notif_handle, user_handle)
         self._notifications: dict[str, tuple[int, int]] = {}
 
     @classmethod
-    def from_toml(cls, path: str | Path) -> "TwinCATComm":
-        return cls(TwinCATConfig.from_toml(path))
+    def from_toml(cls, path: str | Path, *, bus=None) -> "TwinCATComm":
+        return cls(TwinCATConfig.from_toml(path), bus=bus)
 
     # ---- lifecycle ------------------------------------------------------
 
@@ -310,12 +312,22 @@ class TwinCATComm:
 
         log_signals = self.config.log_signals
 
+        bus = self._bus
+
         @self._conn.notification(v.plc_type)
         def _cb(handle, name, timestamp, value):
             unpacked = self._unpack(v, value)
             if log_signals:
                 log.info("ads N %s = %s", alias, _short(unpacked))
+            # Bridge mode: fire the legacy callback first, publish second.
+            # publish() returns immediately; thread-mode subscribers
+            # offload work so the AmsRouter thread isn't blocked.
             callback(alias, unpacked)
+            if bus is not None:
+                from events import PlcSignalChanged, signals
+                bus.publish(signals.plc_signal_changed, PlcSignalChanged(
+                    alias=alias, value=unpacked, ts=time.time(),
+                ))
 
         handles = self._conn.add_device_notification(v.symbol, attr, _cb)
         self._notifications[alias] = handles

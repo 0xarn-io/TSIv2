@@ -103,12 +103,14 @@ class UnitLogger:
         *,
         recipe_alias: str | None = None,
         archive=None,
+        bus=None,
     ):
         self.cfg = cfg
         self.bridge = bridge
         self.plc = plc
         self.recipe_alias = recipe_alias
         self.archive = archive
+        self._bus = bus
         self._q: queue.Queue[dict | None] = queue.Queue(maxsize=_QUEUE_MAX)
         self._writer: threading.Thread | None = None
         self._unsub = None
@@ -118,10 +120,10 @@ class UnitLogger:
     @classmethod
     def from_config(
         cls, cfg: UnitLoggerConfig, *, bridge, plc,
-        recipe_alias: str | None = None, archive=None,
+        recipe_alias: str | None = None, archive=None, bus=None,
     ) -> "UnitLogger":
         return cls(cfg, bridge, plc,
-                   recipe_alias=recipe_alias, archive=archive)
+                   recipe_alias=recipe_alias, archive=archive, bus=bus)
 
     # ---- lifecycle ----------------------------------------------------------
 

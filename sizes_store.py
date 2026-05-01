@@ -103,16 +103,17 @@ def _row_to_size(row: sqlite3.Row) -> Size:
 class SizesStore:
     """SQLite-backed size catalog. Thread-safe via lock."""
 
-    def __init__(self, cfg: SizesConfig):
+    def __init__(self, cfg: SizesConfig, *, bus=None):
         self.cfg = cfg
+        self._bus = bus
         self._conn: sqlite3.Connection | None = None
         self._lock = threading.Lock()
         self._cbs: list[Callable[[SizesChange], None]] = []
         self._silent = False
 
     @classmethod
-    def from_config(cls, cfg: SizesConfig) -> "SizesStore":
-        return cls(cfg)
+    def from_config(cls, cfg: SizesConfig, *, bus=None) -> "SizesStore":
+        return cls(cfg, bus=bus)
 
     # ---- lifecycle ----------------------------------------------------------
 
@@ -148,6 +149,19 @@ class SizesStore:
             try: cb(ev)
             except Exception as e:
                 log.warning("sizes on_change cb failed: %s", e)
+        if self._bus is not None:
+            from events import SizesChanged, signals
+            slot = (ev.size.slot if (ev.size is not None
+                                     and ev.size.slot is not None) else -1)
+            payload = (None if ev.size is None
+                       else {"id": ev.size.id, "slot": ev.size.slot,
+                             "name": ev.size.name,
+                             "width_mm": ev.size.width_mm,
+                             "length_mm": ev.size.length_mm,
+                             "station3": ev.size.station3})
+            self._bus.publish(signals.sizes_changed,
+                              SizesChanged(slot=int(slot or -1),
+                                           op=ev.op, payload=payload))
 
     def silent(self):
         """Context manager: suppress on_change emits inside the block.

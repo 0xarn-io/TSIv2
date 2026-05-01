@@ -39,18 +39,19 @@ class DBOrchestrator:
     DB modules exist now or in the future.
     """
 
-    def __init__(self, cfg, *, plc, bridge, archive=None):
+    def __init__(self, cfg, *, plc, bridge, archive=None, bus=None):
         self.cfg     = cfg
         self._plc    = plc
         self._bridge = bridge
         self._archive = archive
+        self._bus     = bus
         self._services: list[_Service] = []
         self._started:  list[_Service] = []
         self._build()
 
     @classmethod
-    def from_config(cls, cfg, *, plc, bridge, archive=None) -> "DBOrchestrator":
-        return cls(cfg, plc=plc, bridge=bridge, archive=archive)
+    def from_config(cls, cfg, *, plc, bridge, archive=None, bus=None) -> "DBOrchestrator":
+        return cls(cfg, plc=plc, bridge=bridge, archive=archive, bus=bus)
 
     # ---- build (1 line per store) ------------------------------------------
 
@@ -61,9 +62,10 @@ class DBOrchestrator:
                            if getattr(c, "errors_log", None) else None)
         self.recipes    = (RecipesStore.from_config(c.recipes)
                            if getattr(c, "recipes", None) else None)
-        self.sizes      = (SizesStore.from_config(c.sizes)
+        self.sizes      = (SizesStore.from_config(c.sizes, bus=self._bus)
                            if getattr(c, "sizes", None) else None)
-        self.recipe_pub = (RecipePublisher(self.recipes, self._plc, c.plc.recipe)
+        self.recipe_pub = (RecipePublisher(self.recipes, self._plc, c.plc.recipe,
+                                           bus=self._bus)
                            if self.recipes and getattr(c.plc, "recipe", None)
                            else None)
         self.unit_log   = (UnitLogger(
@@ -72,6 +74,7 @@ class DBOrchestrator:
                                             if getattr(c.plc, "recipe", None)
                                             else None),
                               archive=self._archive,
+                              bus=self._bus,
                           )
                            if getattr(c, "unit_log", None) else None)
 
