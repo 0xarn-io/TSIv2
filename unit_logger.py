@@ -171,16 +171,15 @@ class UnitLogger:
         except Exception as e:
             log.debug("unit_logger: initial recipe read failed: %s", e)
 
-        recipe_alias = self.recipe_alias
         def _on_plc(payload):
-            if payload.alias == recipe_alias:
-                try:
-                    self._recipe_code_cache = int(payload.value)
-                except (TypeError, ValueError):
-                    pass
+            try:
+                self._recipe_code_cache = int(payload.value)
+            except (TypeError, ValueError):
+                pass
 
-        self._bus_unsub = self._bus.subscription(
+        self._bus_unsub = self._bus.subscribe_filtered(
             signals.plc_signal_changed, _on_plc, mode="thread",
+            alias=self.recipe_alias,
         )
 
     def stop(self) -> None:

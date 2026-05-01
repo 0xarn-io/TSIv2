@@ -127,13 +127,11 @@ class RecipePublisher:
             )
             return
 
-        code_alias = self.cfg.code_alias
-        def _on_plc(payload):
-            if payload.alias == code_alias:
-                self._queue.put(int(payload.value))
-
-        self._bus_unsub = self._bus.subscription(
-            signals.plc_signal_changed, _on_plc, mode="thread",
+        self._bus_unsub = self._bus.subscribe_filtered(
+            signals.plc_signal_changed,
+            lambda p: self._queue.put(int(p.value)),
+            mode="thread",
+            alias=self.cfg.code_alias,
         )
 
     def _start_legacy_mode(self) -> None:

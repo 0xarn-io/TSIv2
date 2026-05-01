@@ -41,6 +41,8 @@ log = logging.getLogger(__name__)
 
 Mode = Literal["sync", "thread", "async"]
 
+_MISSING = object()  # sentinel: getattr default that compares unequal to everything
+
 
 class EventBus:
     def __init__(self) -> None:
@@ -149,6 +151,48 @@ class EventBus:
             called[0] = True
             self.unsubscribe(signal, wrapper)
         return _undo
+
+    def subscribe_filtered(
+        self,
+        signal:  Signal,
+        handler: Callable[[Any], Any],
+        *,
+        mode: Mode = "sync",
+        **filters: Any,
+    ) -> Callable[[], None]:
+        """Subscribe with payload-attribute equality filters.
+
+        For every ``attr=value`` kwarg, the handler runs only when
+        ``getattr(payload, attr) == value``. Returns a 0-arg
+        unsubscribe handle, like :meth:`subscription`.
+
+        Why: the dominant pattern across PLC subscribers is::
+
+            def _on(payload):
+                if payload.alias == MY_ALIAS:
+                    ...
+            bus.subscription(plc_signal_changed, _on, mode="thread")
+
+        which puts the filter inside each handler — easy to forget,
+        and the handler still gets dispatched (a worker-thread submit)
+        for every unrelated alias. ``subscribe_filtered`` lifts the
+        check to the wrapper so handlers receive only matching events.
+
+        A missing attribute on the payload never matches; the handler
+        is silently skipped rather than raising AttributeError.
+        """
+        if not filters:
+            return self.subscription(signal, handler, mode=mode)
+
+        items = tuple(filters.items())          # bind once
+
+        def _filtered(payload):
+            for attr, want in items:
+                if getattr(payload, attr, _MISSING) != want:
+                    return
+            handler(payload)
+
+        return self.subscription(signal, _filtered, mode=mode)
 
     # ── internals ─────────────────────────────────────────────────────
 

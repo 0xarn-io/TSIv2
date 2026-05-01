@@ -166,3 +166,72 @@ def test_subscription_undo_idempotent(bus):
     undo = bus.subscription(sig, lambda p: None, mode="sync")
     undo()
     undo()                                  # must not raise
+
+
+# ─── subscribe_filtered ───────────────────────────────────────────────────────
+
+class _Payload:
+    def __init__(self, **attrs):
+        self.__dict__.update(attrs)
+
+
+def test_subscribe_filtered_matches_only_when_all_filters_equal(bus):
+    sig = Signal()
+    seen = []
+    bus.subscribe_filtered(
+        sig, lambda p: seen.append(p.value), mode="sync",
+        alias="recipe.code",
+    )
+    bus.publish(sig, _Payload(alias="recipe.code", value=7))
+    bus.publish(sig, _Payload(alias="other",       value=99))
+    bus.publish(sig, _Payload(alias="recipe.code", value=8))
+    assert seen == [7, 8]
+
+
+def test_subscribe_filtered_multiple_filters_all_must_match(bus):
+    sig = Signal()
+    seen = []
+    bus.subscribe_filtered(
+        sig, lambda p: seen.append(p.value), mode="sync",
+        alias="a", kind="bool",
+    )
+    bus.publish(sig, _Payload(alias="a", kind="bool", value=1))   # match
+    bus.publish(sig, _Payload(alias="a", kind="int",  value=2))   # kind mismatch
+    bus.publish(sig, _Payload(alias="b", kind="bool", value=3))   # alias mismatch
+    assert seen == [1]
+
+
+def test_subscribe_filtered_missing_attribute_does_not_match(bus):
+    """Payloads lacking a filtered attr are silently skipped, not errored."""
+    sig = Signal()
+    seen = []
+    bus.subscribe_filtered(
+        sig, lambda p: seen.append(p), mode="sync",
+        alias="x",
+    )
+    bus.publish(sig, _Payload(value=1))         # no .alias attr at all
+    bus.publish(sig, _Payload(alias="x", value=2))
+    assert len(seen) == 1 and seen[0].value == 2
+
+
+def test_subscribe_filtered_returns_zero_arg_undo(bus):
+    sig = Signal()
+    seen = []
+    undo = bus.subscribe_filtered(
+        sig, lambda p: seen.append(p.value), mode="sync",
+        alias="x",
+    )
+    bus.publish(sig, _Payload(alias="x", value=1))
+    undo()
+    bus.publish(sig, _Payload(alias="x", value=2))
+    assert seen == [1]
+
+
+def test_subscribe_filtered_no_filters_passes_all_payloads(bus):
+    """No kwargs ⇒ behaves like subscription() (every event delivered)."""
+    sig = Signal()
+    seen = []
+    bus.subscribe_filtered(sig, lambda p: seen.append(p), mode="sync")
+    bus.publish(sig, "a")
+    bus.publish(sig, "b")
+    assert seen == ["a", "b"]
