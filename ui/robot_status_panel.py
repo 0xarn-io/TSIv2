@@ -4,14 +4,14 @@ Inner tabs:
   * History         — paginated raw rows with opmode + source filters
   * Time in state   — opmode minutes over a window selector
   * Transitions     — chronological change-rows
-  * Daily summary   — per-day minutes table for the last N days
+  * Shifts          — per-shift (06–14 / 14–22 / 22–06) totals for a date
 
 All NiceGUI imports stay inside this module.
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from nicegui import ui
 
@@ -37,6 +37,16 @@ _OPMODE_COLORS = {
     "MANF":     "bg-orange-50",
     "unknown":  "bg-gray-50",
 }
+_ESTOP_TINT = "bg-red-100"
+
+
+def _row_tint(r: dict) -> str:
+    """Estop wins over opmode — a green AUTO row should turn red on
+    emergency stop, since the operational state is dominated by the
+    safety condition, not the mode dial."""
+    if "emergencystop" in (r.get("ctrl_state") or "").lower():
+        return _ESTOP_TINT
+    return _OPMODE_COLORS.get(r.get("opmode") or "", "")
 
 
 class RobotStatusPanel:
@@ -47,11 +57,12 @@ class RobotStatusPanel:
         self._opmode = "all"
         self._source = "all"
         self._window_s = 24 * 3600
-        self._summary_days = 14
+        self._shift_date = date.today().isoformat()
+        self._date_input: ui.input | None = None
         self._history_box:     ui.column | None = None
         self._timeinstate_box: ui.column | None = None
         self._transitions_box: ui.column | None = None
-        self._summary_box:     ui.column | None = None
+        self._shifts_box:      ui.column | None = None
         self._timer: ui.timer | None = None
 
     # ---- mount --------------------------------------------------------------
@@ -59,10 +70,10 @@ class RobotStatusPanel:
     def mount(self) -> None:
         with ui.column().classes("w-full gap-4 p-6"):
             with ui.tabs().props("dense").classes("text-[#0053A1]") as tabs:
-                t_hist  = ui.tab("History",       icon="list")
-                t_state = ui.tab("Time in state", icon="pie_chart")
-                t_trans = ui.tab("Transitions",   icon="timeline")
-                t_sum   = ui.tab("Daily summary", icon="calendar_month")
+                t_hist   = ui.tab("History",       icon="list")
+                t_state  = ui.tab("Time in state", icon="pie_chart")
+                t_trans  = ui.tab("Transitions",   icon="timeline")
+                t_shifts = ui.tab("Shifts",        icon="schedule")
             with ui.tab_panels(tabs, value=t_hist).classes(
                 "w-full bg-transparent"
             ):
@@ -74,9 +85,9 @@ class RobotStatusPanel:
                     self._timeinstate_box = ui.column().classes("w-full gap-1")
                 with ui.tab_panel(t_trans).classes("p-0"):
                     self._transitions_box = ui.column().classes("w-full gap-1")
-                with ui.tab_panel(t_sum).classes("p-0"):
-                    self._render_filters_summary()
-                    self._summary_box = ui.column().classes("w-full gap-1")
+                with ui.tab_panel(t_shifts).classes("p-0"):
+                    self._render_filters_shifts()
+                    self._shifts_box = ui.column().classes("w-full gap-1")
 
             self._timer = ui.timer(_REFRESH_INTERVAL_S, self._refresh_all)
         self._refresh_all()
@@ -119,14 +130,36 @@ class RobotStatusPanel:
                     on_click=self._refresh_all,
                 ).props("flat color=primary")
 
-    def _render_filters_summary(self) -> None:
+    def _render_filters_shifts(self) -> None:
         with card():
             with ui.row().classes("items-center gap-3 w-full"):
-                ui.number(
-                    label="Days",
-                    value=self._summary_days, min=1, max=90, step=1,
-                    on_change=lambda e: self._set_summary_days(int(e.value or 14)),
-                ).classes("w-32")
+                ui.button(icon="chevron_left",
+                          on_click=lambda: self._shift_day(-1)
+                          ).props("flat dense color=primary")
+                inp = ui.input(
+                    label="Date",
+                    value=self._shift_date,
+                    on_change=lambda e: self._set_shift_date(e.value or ""),
+                ).classes("w-40")
+                with inp.add_slot("append"):
+                    ui.icon("event").classes("cursor-pointer").on(
+                        "click",
+                        lambda _e: menu.open(),  # noqa: F821 - menu defined below
+                    )
+                with ui.menu() as menu:
+                    ui.date(
+                        value=self._shift_date,
+                        on_change=lambda e: self._set_shift_date(e.value or ""),
+                    ).bind_value(inp)
+                self._date_input = inp
+                ui.button(icon="chevron_right",
+                          on_click=lambda: self._shift_day(+1)
+                          ).props("flat dense color=primary")
+                ui.button("Today", icon="today",
+                          on_click=lambda: self._set_shift_date(
+                              date.today().isoformat()
+                          )
+                          ).props("flat dense color=primary")
                 ui.space()
                 ui.button(
                     "Refresh", icon="refresh",
@@ -142,8 +175,23 @@ class RobotStatusPanel:
     def _set_window(self, v: int) -> None:
         self._window_s = int(v); self._refresh_all()
 
-    def _set_summary_days(self, v: int) -> None:
-        self._summary_days = max(1, int(v)); self._refresh_all()
+    def _set_shift_date(self, v: str) -> None:
+        v = (v or "").strip()
+        try:
+            datetime.strptime(v, "%Y-%m-%d")
+        except ValueError:
+            return
+        self._shift_date = v
+        if self._date_input is not None:
+            self._date_input.value = v
+        self._refresh_all()
+
+    def _shift_day(self, delta_days: int) -> None:
+        try:
+            d = datetime.strptime(self._shift_date, "%Y-%m-%d").date()
+        except ValueError:
+            d = date.today()
+        self._set_shift_date((d + timedelta(days=delta_days)).isoformat())
 
     # ---- refresh ------------------------------------------------------------
 
@@ -151,7 +199,7 @@ class RobotStatusPanel:
         self._refresh_history()
         self._refresh_time_in_state()
         self._refresh_transitions()
-        self._refresh_summary()
+        self._refresh_shifts()
 
     def _since_iso(self) -> str:
         return (datetime.now(timezone.utc).replace(tzinfo=None)
@@ -200,7 +248,7 @@ class RobotStatusPanel:
             ui.label("Source").classes("w-20")
 
     def _history_row(self, r: dict) -> None:
-        tint = _OPMODE_COLORS.get(r.get("opmode") or "", "")
+        tint = _row_tint(r)
         with ui.row().classes(
             f"w-full items-center gap-3 px-3 py-1.5 text-sm "
             f"border-b border-[#E5E9EE] {tint}"
@@ -298,7 +346,7 @@ class RobotStatusPanel:
                 )
                 return
             for r in rows:
-                tint = _OPMODE_COLORS.get(r.get("opmode") or "", "")
+                tint = _row_tint(r)
                 with ui.row().classes(
                     f"w-full items-center gap-3 px-3 py-1.5 text-sm "
                     f"border-b border-[#E5E9EE] {tint}"
@@ -319,14 +367,14 @@ class RobotStatusPanel:
                         "w-16 text-right font-mono"
                     )
 
-    # ---- daily summary ------------------------------------------------------
+    # ---- shifts -------------------------------------------------------------
 
-    def _refresh_summary(self) -> None:
-        box = self._summary_box
+    def _refresh_shifts(self) -> None:
+        box = self._shifts_box
         if box is None:
             return
         try:
-            rows = self.store.daily_summary(days=self._summary_days)
+            rows = self.store.shift_summary(self._shift_date)
         except Exception as e:
             box.clear()
             with box:
@@ -339,12 +387,13 @@ class RobotStatusPanel:
                 "w-full items-center gap-3 px-3 py-2 text-xs font-semibold "
                 "uppercase tracking-wider text-gray-500 border-b border-[#E5E9EE]"
             ):
-                ui.label("Day").classes("w-28")
+                ui.label("Shift").classes("w-28")
                 ui.label("AUTO").classes("w-24 text-right")
                 ui.label("MANR").classes("w-24 text-right")
                 ui.label("MANF").classes("w-24 text-right")
                 ui.label("Running").classes("w-24 text-right")
                 ui.label("Motors on").classes("w-24 text-right")
+                ui.label("E-stop").classes("w-24 text-right")
                 ui.label("Avg speed").classes("w-24 text-right")
                 ui.label("Stops").classes("w-16 text-right")
             if not rows:
@@ -353,12 +402,14 @@ class RobotStatusPanel:
                 )
                 return
             for r in rows:
+                estop_min = float(r.get("estop_minutes") or 0)
+                tint = _ESTOP_TINT if estop_min > 0 else ""
                 with ui.row().classes(
-                    "w-full items-center gap-3 px-3 py-1.5 text-sm "
-                    "border-b border-[#E5E9EE]"
+                    f"w-full items-center gap-3 px-3 py-1.5 text-sm "
+                    f"border-b border-[#E5E9EE] {tint}"
                 ):
-                    ui.label(r.get("day") or "").classes(
-                        "w-28 font-mono text-xs"
+                    ui.label(r.get("shift") or "").classes(
+                        "w-28 font-semibold text-sm"
                     )
                     ui.label(_fmt_min(r.get("auto_minutes"))).classes(
                         "w-24 text-right font-mono text-xs"
@@ -374,6 +425,11 @@ class RobotStatusPanel:
                     )
                     ui.label(_fmt_min(r.get("motors_on_minutes"))).classes(
                         "w-24 text-right font-mono text-xs"
+                    )
+                    ui.label(_fmt_min(estop_min)).classes(
+                        "w-24 text-right font-mono text-xs "
+                        + ("text-red-700 font-semibold" if estop_min > 0
+                           else "text-gray-400")
                     )
                     ui.label(f"{r.get('avg_speed_ratio') or 0:.0f}%").classes(
                         "w-24 text-right font-mono text-xs"

@@ -254,9 +254,100 @@ def test_daily_summary_aggregates_today(tmp_path: Path):
         today = rows[0]
         # The schema columns we care about exist with non-negative values.
         for col in ("auto_minutes", "manr_minutes", "manf_minutes",
-                    "running_minutes", "motors_on_minutes"):
+                    "running_minutes", "motors_on_minutes",
+                    "estop_minutes"):
             assert today[col] is not None
             assert today[col] >= 0
         assert today["num_stops"] >= 0
+    finally:
+        s.stop()
+
+
+# ─── shift_summary ───────────────────────────────────────────────────────────
+
+def test_shift_summary_returns_three_rows_with_labels(tmp_path: Path):
+    from datetime import date
+    s = _store(tmp_path, tick_period_s=0)
+    s.start()
+    try:
+        _seed(s, [
+            ("AUTO", "motoron", "running", 100),
+            ("MANR", "motoroff", "stopped", 0),
+        ])
+        rows = s.shift_summary(date.today().isoformat())
+        assert len(rows) == 3
+        assert [r["shift"] for r in rows] == ["S1 06–14", "S2 14–22", "S3 22–06"]
+        for r in rows:
+            for col in ("auto_minutes", "manr_minutes", "manf_minutes",
+                        "running_minutes", "motors_on_minutes",
+                        "estop_minutes", "total_minutes"):
+                assert r[col] is not None
+                assert r[col] >= 0
+            assert r["num_stops"] >= 0
+            # start_ts < end_ts and both are in the right calendar day(s).
+            assert r["start_ts"] < r["end_ts"]
+    finally:
+        s.stop()
+
+
+def test_shift_summary_attributes_estop_minutes(tmp_path: Path):
+    """Insert a span with `emergencystop` ctrl_state and confirm it lands
+    in `estop_minutes` for whichever shift contains the timestamp."""
+    from datetime import datetime
+    s = _store(tmp_path, tick_period_s=0)
+    s.start()
+    try:
+        # Direct INSERTs with explicit ts so the spans clearly fall inside
+        # one shift and are wide enough to register at minute precision.
+        today = datetime.now().strftime("%Y-%m-%d")
+        with sqlite3.connect(s.cfg.db_path) as c:
+            c.executemany(
+                """INSERT INTO robot_status_log
+                   (ts, opmode, ctrl_state, exec_state, speed_ratio,
+                    is_ready, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (f"{today} 07:00:00", "AUTO", "emergencystop",
+                     "stopped", 0, 0, "change"),
+                    (f"{today} 07:30:00", "AUTO", "motoron",
+                     "running", 100, 1, "change"),
+                ],
+            )
+            c.commit()
+        rows = s.shift_summary(today)
+        s1 = next(r for r in rows if r["shift"].startswith("S1"))
+        # ~30 minutes of estop in S1.
+        assert s1["estop_minutes"] >= 25
+        # S2 should see no estop time.
+        s2 = next(r for r in rows if r["shift"].startswith("S2"))
+        assert s2["estop_minutes"] == 0
+    finally:
+        s.stop()
+
+
+def test_shift_summary_rejects_bad_date(tmp_path: Path):
+    s = _store(tmp_path, tick_period_s=0)
+    s.start()
+    try:
+        with pytest.raises(ValueError):
+            s.shift_summary("not-a-date")
+    finally:
+        s.stop()
+
+
+def test_shift_summary_s3_crosses_midnight(tmp_path: Path):
+    """S3 starts at 22:00 of date_iso and ends at 06:00 of date_iso+1."""
+    from datetime import date, timedelta
+    s = _store(tmp_path, tick_period_s=0)
+    s.start()
+    try:
+        d = date(2025, 1, 1).isoformat()
+        next_d = (date(2025, 1, 1) + timedelta(days=1)).isoformat()
+        rows = s.shift_summary(d)
+        s3 = next(r for r in rows if r["shift"].startswith("S3"))
+        assert s3["start_ts"].startswith(d)
+        assert s3["end_ts"].startswith(next_d)
+        assert s3["start_ts"].endswith("22:00:00")
+        assert s3["end_ts"].endswith("06:00:00")
     finally:
         s.stop()

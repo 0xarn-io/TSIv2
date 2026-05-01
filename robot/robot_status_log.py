@@ -229,6 +229,9 @@ class RobotStatusLog:
                     AS running_minutes,
                 ROUND(SUM(CASE WHEN ctrl_state='motoron' THEN dur_m ELSE 0 END), 1)
                     AS motors_on_minutes,
+                ROUND(SUM(CASE WHEN LOWER(ctrl_state) LIKE '%emergencystop%'
+                               THEN dur_m ELSE 0 END), 1)
+                    AS estop_minutes,
                 ROUND(AVG(speed_ratio), 1) AS avg_speed_ratio
               FROM spans
              GROUP BY day
@@ -252,6 +255,121 @@ class RobotStatusLog:
                  for r in self._read(stops_sql, [f"-{int(days)} days"])}
         for r in rows:
             r["num_stops"] = stops.get(r["day"], 0)
+        return rows
+
+    # Shifts within a calendar day. S3 22:00 → 06:00 of the next day.
+    # (label, start_hour, end_hour) — hour offsets from midnight of the
+    # selected date; values >24 mean "next day at h-24".
+    SHIFTS = (
+        ("S1 06–14",  6, 14),
+        ("S2 14–22", 14, 22),
+        ("S3 22–06", 22, 30),
+    )
+
+    def shift_summary(self, date_iso: str) -> list[dict]:
+        """One row per shift for the given calendar date (YYYY-MM-DD).
+
+        Same minute totals as `daily_summary`, bounded to a fixed 8-hour
+        shift window. The night shift (S3) crosses midnight: 22:00 of
+        `date_iso` → 06:00 of the next day. Spans crossing the window
+        edges are clipped, and a shift that hasn't ended is clipped at
+        `now` so partial totals still make sense."""
+        from datetime import datetime, timedelta
+
+        try:
+            day0 = datetime.strptime(date_iso, "%Y-%m-%d")
+        except ValueError as e:
+            raise ValueError(
+                f"date_iso must be YYYY-MM-DD, got {date_iso!r}"
+            ) from e
+
+        rows: list[dict] = []
+        for label, h_start, h_end in self.SHIFTS:
+            start_ts = (day0 + timedelta(hours=h_start)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            end_ts = (day0 + timedelta(hours=h_end)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+
+            # The last row whose ts <= start_ts establishes "what state
+            # the robot was in when the shift began" — its tail counts
+            # toward the shift. Spans are clipped to
+            # [start_ts, MIN(LEAD(ts), end_ts, now())].
+            sql = """
+                WITH bounded AS (
+                    SELECT id, ts, opmode, ctrl_state, exec_state, speed_ratio
+                      FROM robot_status_log
+                     WHERE ts < ?
+                       AND id >= COALESCE(
+                           (SELECT MAX(id) FROM robot_status_log WHERE ts <= ?),
+                           0
+                       )
+                ),
+                spans AS (
+                    SELECT
+                        opmode, ctrl_state, exec_state, speed_ratio,
+                        MAX(?, ts) AS span_start,
+                        MIN(
+                            COALESCE(LEAD(ts) OVER (ORDER BY id),
+                                     datetime('now')),
+                            ?,
+                            datetime('now')
+                        ) AS span_end
+                    FROM bounded
+                ),
+                clipped AS (
+                    SELECT opmode, ctrl_state, exec_state, speed_ratio,
+                           (julianday(span_end) - julianday(span_start))
+                           * 1440.0 AS dur_m
+                      FROM spans
+                     WHERE span_end > span_start
+                )
+                SELECT
+                    ROUND(SUM(CASE WHEN opmode='AUTO' THEN dur_m ELSE 0 END), 1)
+                        AS auto_minutes,
+                    ROUND(SUM(CASE WHEN opmode='MANR' THEN dur_m ELSE 0 END), 1)
+                        AS manr_minutes,
+                    ROUND(SUM(CASE WHEN opmode='MANF' THEN dur_m ELSE 0 END), 1)
+                        AS manf_minutes,
+                    ROUND(SUM(CASE WHEN exec_state='running' THEN dur_m ELSE 0 END), 1)
+                        AS running_minutes,
+                    ROUND(SUM(CASE WHEN ctrl_state='motoron' THEN dur_m ELSE 0 END), 1)
+                        AS motors_on_minutes,
+                    ROUND(SUM(CASE WHEN LOWER(ctrl_state) LIKE '%emergencystop%'
+                                   THEN dur_m ELSE 0 END), 1)
+                        AS estop_minutes,
+                    ROUND(AVG(speed_ratio), 1) AS avg_speed_ratio,
+                    ROUND(SUM(dur_m), 1) AS total_minutes
+                  FROM clipped
+            """
+            agg = self._read(sql, [end_ts, start_ts, start_ts, end_ts])
+            row = dict(agg[0]) if agg else {}
+            for k in ("auto_minutes", "manr_minutes", "manf_minutes",
+                      "running_minutes", "motors_on_minutes",
+                      "estop_minutes", "total_minutes"):
+                row[k] = float(row.get(k) or 0.0)
+            row["avg_speed_ratio"] = float(row.get("avg_speed_ratio") or 0.0)
+
+            stop_sql = """
+                WITH ch AS (
+                    SELECT ts, exec_state,
+                           LAG(exec_state) OVER (ORDER BY id) AS prev_exec
+                      FROM robot_status_log
+                     WHERE source = 'change'
+                )
+                SELECT COUNT(*) AS n
+                  FROM ch
+                 WHERE prev_exec = 'running' AND exec_state <> 'running'
+                   AND ts >= ? AND ts < ?
+            """
+            stop_rows = self._read(stop_sql, [start_ts, end_ts])
+            row["num_stops"] = int(stop_rows[0]["n"]) if stop_rows else 0
+
+            row["shift"]    = label
+            row["start_ts"] = start_ts
+            row["end_ts"]   = end_ts
+            rows.append(row)
         return rows
 
     def query(self, sql: str, params: Iterable[Any] = ()) -> list[dict]:
