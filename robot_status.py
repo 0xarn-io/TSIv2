@@ -139,18 +139,29 @@ class RobotMonitor:
     ) -> list[dict]:
         """One-shot event-log pull. Returns a list of dicts (warnings + errors).
 
-        Some controllers occasionally emit a malformed JSON elog batch
-        (an event message contains an unescaped quote/backslash). Halve
-        the limit and retry rather than dropping the whole tick.
+        Some controllers occasionally emit malformed JSON for elog
+        batches — typically caused by unescaped chars in the localized
+        message strings. Try a few progressively safer fetches before
+        giving up: full batch with lang=en, smaller batch, then raw
+        (no lang) which skips the translation layer entirely.
         """
         path = f"/rw/elog/{domain}"
-        obj = self._get(path, params={"lang": "en", "lim": limit}, silent=True)
-        if obj is None and limit > 4:
-            # Retry with a smaller window — usually skips the bad event.
-            smaller = max(4, limit // 4)
-            obj = self._get(path, params={"lang": "en", "lim": smaller}, silent=True)
+        smaller = max(4, limit // 4)
+        attempts = [
+            {"lang": "en", "lim": limit},
+            {"lang": "en", "lim": smaller},
+            {"lim": limit},          # raw — bypass localized strings
+            {"lim": smaller},
+        ]
+        obj = None
+        for params in attempts:
+            obj = self._get(path, params=params, silent=True)
+            if obj is not None:
+                break
         if obj is None:
-            log.warning("RWS GET %s failed (lim=%s): malformed response", path, limit)
+            log.warning(
+                "RWS GET %s failed (all variants): malformed response", path,
+            )
             return []
         items = obj.get("_embedded", {}).get("resources", [])
         TYPES = {"1": "INFO", "2": "WARN", "3": "ERROR"}
