@@ -16,11 +16,17 @@ when introspecting (`plc_*`, `sick_*`, `robot_*`, `camera_*`, `recipe_*`,
 This module deliberately knows nothing about the bus or threading model —
 it's just data classes and signal handles. event_bus.py owns the dispatch
 strategy.
+
+Source-of-truth rule: each topic has exactly ONE publisher class — see
+`OWNERS` below. Subscribers must NEVER publish to a topic they don't own;
+that's how loop-backs sneak in. When a subscriber needs to react to a
+change but mustn't echo back, it filters by `payload.origin` against its
+own publisher tag.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 from blinker import Signal
 
@@ -121,13 +127,19 @@ class RecipeSetpointsPushed:
 
 @dataclass(frozen=True)
 class SizesChanged:
-    """A row in the sizes store was inserted, updated, or cleared.
+    """A row in the sizes store was inserted, updated, or deleted.
 
-    `op` is one of 'upsert' | 'clear' | 'reload'. `payload` is the row
-    (or None for clear)."""
+    `op` matches the SizesStore vocabulary: 'add' | 'update' | 'delete'.
+    `payload` is the row dict (or None for delete). `slot` is the row's
+    pinned slot when known, else -1. `origin` tags who triggered the
+    change so subscribers can self-filter — e.g. `robot_master` writes
+    rows tagged 'robot_master' and ignores those events to avoid echoing
+    the change back to the controller.
+    """
     slot:    int
-    op:      str
+    op:      Literal["add", "update", "delete"]
     payload: Mapping[str, Any] | None
+    origin:  str = "user"
 
 
 # ─── Signals ──────────────────────────────────────────────────────────────────
@@ -166,4 +178,24 @@ TOPICS: dict[type, Signal] = {
     RecipeCodeChanged:      signals.recipe_code_changed,
     RecipeSetpointsPushed:  signals.recipe_setpoints_pushed,
     SizesChanged:           signals.sizes_changed,
+}
+
+
+# Source-of-truth ownership: which class is allowed to publish each
+# signal. Anything else doing so is a refactor mistake — subscribers
+# never publish to topics they don't own (that's how loop-backs sneak in).
+# Strings (not classes) keep the dict importable without circular deps.
+OWNERS: dict[Signal, str] = {
+    signals.plc_signal_changed:      "twincat_comm.TwinCATComm",
+    signals.sick_measurement:        "sick_bridge.SickBridge",
+    signals.sick_unit_event:         "sick_bridge.SickBridge",
+    signals.robot_status_changed:    "robot_status.RobotMonitor",
+    signals.robot_var_changed:       "robot_variables.RobotVariablesMonitor",
+    signals.robot_error_logged:      "robot_errors.RobotElogPoller",
+    signals.master_array_changed:    "robot_master.RobotMasterMonitor",
+    signals.camera_triggered:        "camera_publisher.CameraPublisher",
+    signals.camera_snapshot_taken:   "camera_panel.CameraPanel",
+    signals.recipe_code_changed:     "recipe_publisher.RecipePublisher",
+    signals.recipe_setpoints_pushed: "recipe_publisher.RecipePublisher",
+    signals.sizes_changed:           "sizes_store.SizesStore",
 }
