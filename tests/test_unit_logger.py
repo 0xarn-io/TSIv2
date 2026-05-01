@@ -239,3 +239,77 @@ def test_db_dir_auto_created(tmp_path: Path):
         assert Path(cfg.db_path).is_file()
     finally:
         u.stop()
+
+
+# ---- bus-mode subscription -------------------------------------------------
+
+def test_bus_path_writes_row_and_uses_cached_recipe_code(tmp_path: Path):
+    """When a bus is supplied, unit events arrive via the bus and the
+    recipe code is the last value seen on PlcSignalChanged — never read
+    synchronously inside the event path."""
+    import asyncio
+    from event_bus import EventBus
+    from events import (
+        PlcSignalChanged, SickUnitEvent, signals,
+    )
+
+    bus = EventBus()
+    loop = asyncio.new_event_loop()
+    bus.start(loop)
+    try:
+        cfg = UnitLoggerConfig(db_path=str(tmp_path / "units.db"))
+        bridge = MagicMock()  # should not be subscribed when bus is used
+        plc = MagicMock(); plc.read.return_value = 3   # bootstrap value
+        u = UnitLogger(cfg, bridge, plc,
+                       recipe_alias="recipe.code", bus=bus)
+        u.start()
+        try:
+            # Recipe code update arrives via the bus.
+            bus.publish(signals.plc_signal_changed,
+                        PlcSignalChanged(alias="recipe.code",
+                                         value=11, ts=0.0))
+            # Unit event arrives via the bus.
+            bus.publish(signals.sick_unit_event,
+                        SickUnitEvent(event=_evt()))
+            _drain(u, 1, timeout=2.0)
+            row = u.recent()[0]
+            assert row["recipe_code"] == 11
+            assert row["width_mm"]    == 711
+            # bridge.on_event must NOT have been used in bus mode.
+            bridge.on_event.assert_not_called()
+        finally:
+            u.stop()
+    finally:
+        bus.stop()
+        loop.close()
+
+
+def test_bus_path_ignores_unrelated_alias(tmp_path: Path):
+    """Recipe-code subscription only updates the cache for our alias."""
+    import asyncio
+    from event_bus import EventBus
+    from events import PlcSignalChanged, SickUnitEvent, signals
+
+    bus = EventBus()
+    loop = asyncio.new_event_loop()
+    bus.start(loop)
+    try:
+        cfg = UnitLoggerConfig(db_path=str(tmp_path / "units.db"))
+        plc = MagicMock(); plc.read.return_value = 5  # bootstrap
+        u = UnitLogger(cfg, MagicMock(), plc,
+                       recipe_alias="recipe.code", bus=bus)
+        u.start()
+        try:
+            # Different alias — should NOT update the recipe cache.
+            bus.publish(signals.plc_signal_changed,
+                        PlcSignalChanged(alias="some.other.signal",
+                                         value=99, ts=0.0))
+            bus.publish(signals.sick_unit_event,
+                        SickUnitEvent(event=_evt()))
+            _drain(u, 1, timeout=2.0)
+            assert u.recent()[0]["recipe_code"] == 5  # bootstrap value
+        finally:
+            u.stop()
+    finally:
+        bus.stop()
+        loop.close()

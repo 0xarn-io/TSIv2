@@ -1,15 +1,20 @@
 """unit_logger.py — append-only SQLite log of every unit (box) measured.
 
-Subscribes to `SickBridge.on_event` so every UnitEvent the SICK publishes
-gets one row, enriched with:
-  - the active recipe code read from the PLC at log time (if a recipe
-    alias is configured), and
+When an EventBus is supplied, subscribes to `signals.sick_unit_event`
+(every UnitEvent → one row) and `signals.plc_signal_changed` for the
+recipe-code alias (kept cached, never read synchronously from the
+receiver thread). When no bus is supplied, falls back to the legacy
+`bridge.on_event` + `plc.read()` path so existing tests and headless
+configurations keep working.
+
+Each row is enriched with:
+  - the cached active recipe code (if a recipe alias is configured), and
   - the latest snapshot paths from each camera (if a SnapshotArchive is
     provided).
 
-A dedicated writer thread + Queue keeps DB I/O off the SICK receiver
-thread. The logger never imports RecipesStore — recipe context is just an
-integer code; tolerance evaluation is downstream.
+A dedicated writer thread + Queue keeps DB I/O off the receiver thread.
+The logger never imports RecipesStore — recipe context is just an integer
+code; tolerance evaluation is downstream.
 """
 from __future__ import annotations
 
@@ -114,6 +119,12 @@ class UnitLogger:
         self._q: queue.Queue[dict | None] = queue.Queue(maxsize=_QUEUE_MAX)
         self._writer: threading.Thread | None = None
         self._unsub = None
+        # Bus-mode subscriptions; tracked so stop() can disconnect cleanly.
+        self._bus_subs: list = []
+        # Cached recipe code from PlcSignalChanged subscription. Read by
+        # _build_row on the writer thread, written by the bus dispatch.
+        self._recipe_code: int | None = None
+        self._recipe_lock = threading.Lock()
         self._read_conn: sqlite3.Connection | None = None
         self._read_lock = threading.Lock()
 
@@ -147,9 +158,45 @@ class UnitLogger:
             target=self._run, daemon=True, name="unit-writer",
         )
         self._writer.start()
-        self._unsub = self.bridge.on_event(self._on_event)
+
+        if self._bus is not None:
+            from events import signals
+            # Unit events: thread mode so DB queueing happens off the
+            # receiver thread (the bus already executor-hops; this is just
+            # the receiver-thread → executor handoff).
+            self._bus_subs.append((
+                signals.sick_unit_event,
+                self._bus.subscribe(signals.sick_unit_event,
+                                    lambda p: self._on_event(p.event),
+                                    mode="thread"),
+            ))
+            # Recipe code cache: every PlcSignalChanged for our alias
+            # updates the local cache. No more synchronous plc.read() in
+            # the unit-event path.
+            if self.recipe_alias:
+                self._bus_subs.append((
+                    signals.plc_signal_changed,
+                    self._bus.subscribe(signals.plc_signal_changed,
+                                        self._on_plc_signal,
+                                        mode="thread"),
+                ))
+                # Bootstrap the cache so the first unit event after start
+                # already has a recipe code (if the PLC is reachable).
+                try:
+                    with self._recipe_lock:
+                        self._recipe_code = int(self.plc.read(self.recipe_alias))
+                except Exception as e:
+                    log.debug("unit_logger: bootstrap recipe read failed: %s", e)
+        else:
+            # Legacy path — keep working for headless tests / configs that
+            # don't construct an EventBus.
+            self._unsub = self.bridge.on_event(self._on_event)
 
     def stop(self) -> None:
+        for sig, w in self._bus_subs:
+            try: self._bus.unsubscribe(sig, w)
+            except Exception: pass
+        self._bus_subs.clear()
         if self._unsub is not None:
             try: self._unsub()
             except Exception: pass
@@ -162,6 +209,18 @@ class UnitLogger:
             try: self._read_conn.close()
             except Exception: pass
             self._read_conn = None
+
+    # ---- bus handlers -------------------------------------------------------
+
+    def _on_plc_signal(self, payload) -> None:
+        if payload.alias != self.recipe_alias:
+            return
+        try:
+            code = int(payload.value)
+        except (TypeError, ValueError):
+            return
+        with self._recipe_lock:
+            self._recipe_code = code
 
     # ---- public API ---------------------------------------------------------
 
@@ -215,6 +274,9 @@ class UnitLogger:
     def _read_recipe_code(self) -> int | None:
         if not self.recipe_alias:
             return None
+        if self._bus is not None:
+            with self._recipe_lock:
+                return self._recipe_code
         try:
             return int(self.plc.read(self.recipe_alias))
         except Exception as e:
