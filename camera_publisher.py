@@ -1,7 +1,8 @@
 """camera_publisher.py — fire camera snapshots from PLC bool rising edges.
 
 Wiring (do once in main, then call .start() / .stop()):
-    plc.subscribe(alias) → cameras.trigger(camera_name)  # on rising edge
+    plc.subscribe(alias) → cameras.snap(camera_name)  # on rising edge
+    panel.on_snapshot_done → plc.write(alias, False)  # ack handshake
 
 Each entry in `cfg.plc.camera_triggers` maps a PLC bool alias (defined in
 plc_signals.toml) to a camera name (defined in app_config.toml [[cameras]]).
@@ -58,7 +59,7 @@ class CameraPublisher:
             def _cb(_alias, val, name=t.camera):
                 if val:
                     log.info("snap %s", name)
-                    self.cameras.trigger(name)
+                    self.cameras.snap(name, source=f"trigger:{name}")
 
             handles = self.plc.subscribe(t.alias, _cb, on_change=True)
             self._handles.append(handles)

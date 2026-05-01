@@ -224,7 +224,7 @@ def test_get_first_field_name_fallback():
 
 def test_fetch_errors_passes_limit_to_request():
     captured = {}
-    def fake_get(path, params=None):
+    def fake_get(path, params=None, silent=False):
         captured["path"] = path
         captured["params"] = params
         return _elog_response()

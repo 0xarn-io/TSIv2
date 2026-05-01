@@ -94,11 +94,3 @@ prefix = "pyADS"
 code      = { name = "nRecipeCode",     type = "DINT" }
 setpoints = { name = "RecipeSetpoints", type = "ST_RecipeSetpoints" }
 
-[groups.size]
-prefix = "pyADS"
-
-[groups.size.vars]
-cardboard_id        = { name = "nCardboardId",       type = "INT" }
-cardboard_setpoints = { name = "CardboardSetpoints", type = "ST_SizeSetpoints" }
-others_id           = { name = "nOtherId",           type = "INT" }
-others_setpoints    = { name = "OtherSetpoints",     type = "ST_SizeSetpoints" }
