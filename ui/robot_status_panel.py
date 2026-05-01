@@ -403,10 +403,9 @@ class RobotStatusPanel:
                 return
             for r in rows:
                 estop_min = float(r.get("estop_minutes") or 0)
-                tint = _ESTOP_TINT if estop_min > 0 else ""
                 with ui.row().classes(
-                    f"w-full items-center gap-3 px-3 py-1.5 text-sm "
-                    f"border-b border-[#E5E9EE] {tint}"
+                    "w-full items-center gap-3 px-3 py-1.5 text-sm "
+                    "border-b border-[#E5E9EE]"
                 ):
                     ui.label(r.get("shift") or "").classes(
                         "w-28 font-semibold text-sm"
