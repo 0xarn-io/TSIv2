@@ -245,6 +245,7 @@ class RobotStatusPanel:
             ui.label("Exec").classes("w-24")
             ui.label("Speed").classes("w-16 text-right")
             ui.label("Ready").classes("w-16 text-center")
+            ui.label("Bypass").classes("w-20 text-center")
             ui.label("Source").classes("w-20")
 
     def _history_row(self, r: dict) -> None:
@@ -263,6 +264,12 @@ class RobotStatusPanel:
             ui.label("✓" if r.get("is_ready") else "·").classes(
                 "w-16 text-center "
                 + ("text-green-700 font-semibold" if r.get("is_ready")
+                   else "text-gray-400")
+            )
+            byp = bool(r.get("bypass"))
+            ui.label("BYPASS" if byp else "·").classes(
+                "w-20 text-center text-xs "
+                + ("text-orange-700 font-semibold" if byp
                    else "text-gray-400")
             )
             ui.label(r.get("source") or "").classes("w-20 text-xs text-gray-500")
@@ -388,21 +395,19 @@ class RobotStatusPanel:
                 "uppercase tracking-wider text-gray-500 border-b border-[#E5E9EE]"
             ):
                 ui.label("Shift").classes("w-28")
-                ui.label("AUTO").classes("w-24 text-right")
-                ui.label("MANR").classes("w-24 text-right")
-                ui.label("MANF").classes("w-24 text-right")
-                ui.label("Running").classes("w-24 text-right")
-                ui.label("Motors on").classes("w-24 text-right")
+                ui.label("Ready").classes("w-24 text-right")
+                ui.label("Enabled").classes("w-24 text-right")
+                ui.label("Bypass").classes("w-24 text-right")
                 ui.label("E-stop").classes("w-24 text-right")
-                ui.label("Avg speed").classes("w-24 text-right")
-                ui.label("Stops").classes("w-16 text-right")
             if not rows:
                 ui.label("No data.").classes(
                     "text-gray-500 italic px-3 py-4"
                 )
                 return
             for r in rows:
-                estop_min = float(r.get("estop_minutes") or 0)
+                ready_min  = float(r.get("ready_minutes")   or 0)
+                bypass_min = float(r.get("bypass_minutes")  or 0)
+                estop_min  = float(r.get("estop_minutes")   or 0)
                 with ui.row().classes(
                     "w-full items-center gap-3 px-3 py-1.5 text-sm "
                     "border-b border-[#E5E9EE]"
@@ -410,31 +415,23 @@ class RobotStatusPanel:
                     ui.label(r.get("shift") or "").classes(
                         "w-28 font-semibold text-sm"
                     )
-                    ui.label(_fmt_min(r.get("auto_minutes"))).classes(
+                    ui.label(_fmt_min(ready_min)).classes(
+                        "w-24 text-right font-mono text-xs "
+                        + ("text-green-700 font-semibold" if ready_min > 0
+                           else "text-gray-400")
+                    )
+                    ui.label(_fmt_min(r.get("enabled_minutes"))).classes(
                         "w-24 text-right font-mono text-xs"
                     )
-                    ui.label(_fmt_min(r.get("manr_minutes"))).classes(
-                        "w-24 text-right font-mono text-xs"
-                    )
-                    ui.label(_fmt_min(r.get("manf_minutes"))).classes(
-                        "w-24 text-right font-mono text-xs"
-                    )
-                    ui.label(_fmt_min(r.get("running_minutes"))).classes(
-                        "w-24 text-right font-mono text-xs"
-                    )
-                    ui.label(_fmt_min(r.get("motors_on_minutes"))).classes(
-                        "w-24 text-right font-mono text-xs"
+                    ui.label(_fmt_min(bypass_min)).classes(
+                        "w-24 text-right font-mono text-xs "
+                        + ("text-red-700 font-semibold" if bypass_min > 0
+                           else "text-gray-400")
                     )
                     ui.label(_fmt_min(estop_min)).classes(
                         "w-24 text-right font-mono text-xs "
                         + ("text-red-700 font-semibold" if estop_min > 0
                            else "text-gray-400")
-                    )
-                    ui.label(f"{r.get('avg_speed_ratio') or 0:.0f}%").classes(
-                        "w-24 text-right font-mono text-xs"
-                    )
-                    ui.label(str(r.get("num_stops") or 0)).classes(
-                        "w-16 text-right font-mono text-xs"
                     )
 
 
