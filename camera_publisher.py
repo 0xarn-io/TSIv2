@@ -99,7 +99,7 @@ class CameraPublisher:
             log.info("snap %s", cam)
             self.cameras.snap(cam, source=f"trigger:{cam}")
 
-        self._bus_unsub = self._bus.subscribe(
+        self._bus_unsub = self._bus.subscription(
             signals.plc_signal_changed, _on_plc, mode="thread",
         )
 

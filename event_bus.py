@@ -128,6 +128,28 @@ class EventBus:
         with self._lock:
             self._wrappers = [(s, w) for s, w in self._wrappers if w is not wrapper]
 
+    def subscription(
+        self,
+        signal:  Signal,
+        handler: Callable[[Any], Any],
+        *,
+        mode: Mode = "sync",
+    ) -> Callable[[], None]:
+        """Subscribe and return a 0-arg unsubscribe callable.
+
+        Convenience over `subscribe()` — publishers usually only want an
+        undo handle, not the wrapper object. Idempotent: calling the
+        returned function twice is a no-op.
+        """
+        wrapper = self.subscribe(signal, handler, mode=mode)
+        called = [False]
+        def _undo() -> None:
+            if called[0]:
+                return
+            called[0] = True
+            self.unsubscribe(signal, wrapper)
+        return _undo
+
     # ── internals ─────────────────────────────────────────────────────
 
     @staticmethod

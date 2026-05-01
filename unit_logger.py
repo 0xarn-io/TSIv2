@@ -179,7 +179,7 @@ class UnitLogger:
                 except (TypeError, ValueError):
                     pass
 
-        self._bus_unsub = self._bus.subscribe(
+        self._bus_unsub = self._bus.subscription(
             signals.plc_signal_changed, _on_plc, mode="thread",
         )
 

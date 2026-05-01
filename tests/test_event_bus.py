@@ -147,3 +147,22 @@ def test_unsubscribe(bus):
     bus.unsubscribe(sig, w)
     bus.publish(sig, 2)
     assert calls == [1]
+
+
+def test_subscription_returns_zero_arg_unsub(bus):
+    """subscription() — convenience handle that publishers actually want."""
+    sig = Signal()
+    calls = []
+    undo = bus.subscription(sig, lambda p: calls.append(p), mode="sync")
+    bus.publish(sig, 1)
+    undo()                                  # 0-arg unsubscribe
+    bus.publish(sig, 2)
+    assert calls == [1]
+
+
+def test_subscription_undo_idempotent(bus):
+    """Calling the returned undo twice is a no-op (no exception)."""
+    sig = Signal()
+    undo = bus.subscription(sig, lambda p: None, mode="sync")
+    undo()
+    undo()                                  # must not raise

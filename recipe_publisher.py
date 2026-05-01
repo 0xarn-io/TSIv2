@@ -132,7 +132,7 @@ class RecipePublisher:
             if payload.alias == code_alias:
                 self._queue.put(int(payload.value))
 
-        self._bus_unsub = self._bus.subscribe(
+        self._bus_unsub = self._bus.subscription(
             signals.plc_signal_changed, _on_plc, mode="thread",
         )
 

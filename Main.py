@@ -153,7 +153,10 @@ def _startup() -> None:
     import asyncio
     loop = asyncio.get_event_loop()
     cameras.attach_loop(loop)
-    bus.start(loop)                         # before any producer publishes
+    # 4 workers: camera/recipe/unit-logger/robot_master each subscribe
+    # in mode='thread'; 2 was the old default and is too tight for the
+    # current set of bus subscribers.
+    bus.start(loop, workers=4)              # before any producer publishes
     plc.open()
     if archive:    archive.start()        # one-shot prune
     bridge.start()

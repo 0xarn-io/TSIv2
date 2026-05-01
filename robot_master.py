@@ -102,7 +102,7 @@ class RobotMasterMonitor:
     def start(self) -> None:
         if self._bus is not None:
             from events import signals
-            self._unsub_bus = self._bus.subscribe(
+            self._unsub_bus = self._bus.subscription(
                 signals.sizes_changed, self._on_sizes_event, mode="thread",
             )
         else:
