@@ -83,12 +83,20 @@ class SickPublisher:
         except Exception as e:
             log.warning("initial enable read failed: %s", e)
 
-        self._enable_handles = self.plc.subscribe(
-            self.cfg.enable_alias,
-            lambda _alias, val: self._apply_enable(bool(val)),
-            cycle_time_ms=self.cfg.enable_cycle_ms,
-            on_change=True,
-        )
+        try:
+            self._enable_handles = self.plc.subscribe(
+                self.cfg.enable_alias,
+                lambda _alias, val: self._apply_enable(bool(val)),
+                cycle_time_ms=self.cfg.enable_cycle_ms,
+                on_change=True,
+            )
+        except Exception as e:
+            log.warning(
+                "enable subscription failed (%s); SICK publisher running "
+                "without remote enable/disable from '%s'",
+                e, self.cfg.enable_alias,
+            )
+            self._enable_handles = None
 
     def stop(self) -> None:
         if self._enable_handles is not None:
