@@ -39,6 +39,14 @@ _OPMODE_COLORS = {
 }
 _ESTOP_TINT = "bg-red-100"
 
+# Time-in-state bar fill (hex) + label text color, by safety category.
+# Estop > bypass > enabled in operator-attention order.
+_STATE_BAR_STYLE: dict[str, tuple[str, str]] = {
+    "estop":   ("#C0392B", "text-red-700"),     # red
+    "bypass":  ("#E8A33D", "text-orange-700"),  # warning amber
+    "enabled": ("#4DA32F", "text-green-700"),   # accent green
+}
+
 
 def _row_tint(r: dict) -> str:
     """Estop wins over opmode — a green AUTO row should turn red on
@@ -301,20 +309,20 @@ class RobotStatusPanel:
                 for r in rows:
                     secs = float(r.get("seconds") or 0)
                     pct  = secs / total * 100.0
-                    label = r.get("opmode") or "unknown"
+                    state = r.get("state") or "unknown"
+                    bar_color, label_class = _STATE_BAR_STYLE.get(
+                        state, ("#0053A1", "text-gray-700")
+                    )
                     with ui.row().classes("w-full items-center gap-3"):
-                        ui.label(label).classes(
-                            "w-24 font-semibold text-sm"
+                        ui.label(state.upper()).classes(
+                            f"w-24 font-semibold text-sm {label_class}"
                         )
                         with ui.element("div").classes(
                             "flex-grow h-5 rounded bg-[#E5E9EE] overflow-hidden"
                         ):
-                            tint = _OPMODE_COLORS.get(label, "bg-blue-200")
-                            ui.element("div").classes(
-                                f"h-full {tint}"
-                            ).style(
+                            ui.element("div").classes("h-full").style(
                                 f"width: {pct:.1f}%; "
-                                f"background-color: #0053A1; opacity: 0.85;"
+                                f"background-color: {bar_color}; opacity: 0.9;"
                             )
                         ui.label(f"{_fmt_dur(secs)}  ({pct:.1f}%)").classes(
                             "w-44 text-right font-mono text-xs"

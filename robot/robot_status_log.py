@@ -193,33 +193,54 @@ class RobotStatusLog:
         return self._read(sql, params)
 
     def time_in_state(self, since_iso: str) -> list[dict]:
-        """SUM(seconds) per opmode over [since_iso, now].
+        """SUM(seconds) per safety state over [since_iso, now].
 
-        Each row's "duration" = next row's ts − this row's ts (LEAD over id).
-        The final row is open-ended so we close it with `now`. Rows whose
-        ts predates `since_iso` are clipped to start at `since_iso`."""
+        Categories are mutually exclusive and ranked by severity so each
+        span lands in exactly one bucket:
+
+          * `estop`    — ctrl_state contains 'emergencystop'
+          * `bypass`   — bypass = 1 (and not estop)
+          * `enabled`  — neither of the above
+
+        Bypass / enabled is the operationally meaningful axis (it's what
+        the safety circuit cares about); opmode breakdowns belong in the
+        history view, not the headline summary.
+
+        Each row's "duration" = next row's ts − this row's ts (LEAD over
+        id). The final row is open-ended so we close it with `now`. Rows
+        whose ts predates `since_iso` are clipped to start at `since_iso`."""
         sql = """
             WITH win AS (
-                SELECT id, ts, opmode FROM robot_status_log
+                SELECT id, ts, ctrl_state, bypass FROM robot_status_log
                  WHERE ts >= ?
                  UNION ALL
-                SELECT id, ?, opmode FROM robot_status_log
+                SELECT id, ?, ctrl_state, bypass FROM robot_status_log
                  WHERE id = (
                     SELECT MAX(id) FROM robot_status_log WHERE ts < ?
                  )
             ),
             spans AS (
                 SELECT
-                    opmode,
+                    CASE
+                        WHEN LOWER(ctrl_state) LIKE '%emergencystop%' THEN 'estop'
+                        WHEN bypass = 1                                THEN 'bypass'
+                        ELSE                                                'enabled'
+                    END AS state,
                     (julianday(COALESCE(LEAD(ts) OVER (ORDER BY ts, id),
                                         datetime('now')))
                      - julianday(ts)) * 86400.0 AS dur_s
                 FROM win
             )
-            SELECT opmode, ROUND(SUM(dur_s), 1) AS seconds
+            SELECT state, ROUND(SUM(dur_s), 1) AS seconds
               FROM spans
-             GROUP BY opmode
-             ORDER BY seconds DESC
+             GROUP BY state
+             ORDER BY
+                 CASE state
+                     WHEN 'estop'   THEN 0
+                     WHEN 'bypass'  THEN 1
+                     WHEN 'enabled' THEN 2
+                     ELSE                3
+                 END
         """
         return self._read(sql, [since_iso, since_iso, since_iso])
 
