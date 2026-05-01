@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+# Project modules sit at the repo root (event_bus.py, sizes_store.py, ...);
+# tests live under tests/. Without this, pytest's rootdir collection finds
+# tests/conftest.py but doesn't add the repo root to sys.path, so every
+# `from event_bus import ...` fails on a clean install (CI, fresh clone).
+pythonpath = ["."]
