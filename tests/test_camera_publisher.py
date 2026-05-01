@@ -1,11 +1,16 @@
 """Tests for CameraPublisher: PLC bool → camera trigger wiring."""
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
 
 from camera_publisher import CameraPublisher, CameraTriggerConfig
+from event_bus import EventBus
+from tests.fakes import FakeTwinCATComm
 
 
 def _make(trigger_count: int = 2):
@@ -190,3 +195,111 @@ def test_stop_removes_done_callbacks():
     pub.stop()
     unsubs[0].assert_called_once()
     unsubs[1].assert_called_once()
+
+
+# ---- bus-mode integration ----
+# Real EventBus + FakeTwinCATComm + real CameraPublisher. Catches the
+# refactor-branch bug class: forgetting to register the ADS notification
+# would mean simulate_change fires nobody, and the snap never happens.
+
+def _make_bus_loop():
+    """Start a fresh asyncio loop on a thread so EventBus can dispatch."""
+    loop = asyncio.new_event_loop()
+    started = threading.Event()
+    def _run():
+        asyncio.set_event_loop(loop)
+        loop.call_soon(started.set)
+        loop.run_forever()
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    started.wait(timeout=1.0)
+    return loop, t
+
+
+def _stop_bus_loop(bus, loop, t):
+    bus.stop()
+    loop.call_soon_threadsafe(loop.stop)
+    t.join(timeout=2.0)
+    loop.close()
+
+
+def _make_bus_pub():
+    """Wire a real EventBus + FakeTwinCATComm + real CameraPublisher."""
+    bus = EventBus()
+    loop, t = _make_bus_loop()
+    bus.start(loop)
+    plc = FakeTwinCATComm(bus=bus)
+    cameras = MagicMock()
+    panels = {"entry": MagicMock(), "exit": MagicMock()}
+    for p in panels.values():
+        p.on_snapshot_done.return_value = MagicMock()
+    cameras.panels = panels
+    triggers = [
+        CameraTriggerConfig(alias="camera.snap_entry", camera="entry"),
+        CameraTriggerConfig(alias="camera.snap_exit",  camera="exit"),
+    ]
+    pub = CameraPublisher(cameras, plc, triggers, bus=bus)
+    return pub, cameras, plc, bus, loop, t
+
+
+def test_bus_mode_registers_ads_notifications_for_each_alias():
+    """Regression for the bus-migration bug: bus mode must still register
+    the underlying ADS notifications so PlcSignalChanged actually fires."""
+    pub, cameras, plc, bus, loop, t = _make_bus_pub()
+    try:
+        pub.start()
+        # Both trigger aliases must have a notification registered, else
+        # simulate_change would fire nothing and the bus subscriber would
+        # never see the rising edge.
+        assert plc.aliases_with_notifications() == {
+            "camera.snap_entry", "camera.snap_exit",
+        }
+    finally:
+        pub.stop()
+        _stop_bus_loop(bus, loop, t)
+
+
+def test_bus_mode_round_trip_fires_camera_on_rising_edge():
+    """Real bus + real subscriber: simulate_change → cameras.snap called."""
+    pub, cameras, plc, bus, loop, t = _make_bus_pub()
+    try:
+        pub.start()
+        plc.simulate_change("camera.snap_entry", True)
+        # bus dispatches in mode='thread' → give the worker a moment.
+        for _ in range(50):
+            if cameras.snap.called:
+                break
+            time.sleep(0.01)
+        cameras.snap.assert_called_with("entry", source="trigger:entry")
+    finally:
+        pub.stop()
+        _stop_bus_loop(bus, loop, t)
+
+
+def test_bus_mode_falling_edge_does_not_fire():
+    pub, cameras, plc, bus, loop, t = _make_bus_pub()
+    try:
+        pub.start()
+        plc.simulate_change("camera.snap_entry", False)
+        time.sleep(0.05)
+        cameras.snap.assert_not_called()
+    finally:
+        pub.stop()
+        _stop_bus_loop(bus, loop, t)
+
+
+def test_bus_mode_unknown_alias_ignored():
+    """Bus broadcasts every PlcSignalChanged; the subscriber must filter."""
+    pub, cameras, plc, bus, loop, t = _make_bus_pub()
+    try:
+        pub.start()
+        # Simulate a change on an alias that's not in our trigger map.
+        plc._notifications["sick.event"] = []  # no callbacks; force publish via bus
+        from events import PlcSignalChanged, signals
+        bus.publish(signals.plc_signal_changed,
+                    PlcSignalChanged(alias="sick.event", value=True, ts=0.0))
+        time.sleep(0.05)
+        cameras.snap.assert_not_called()
+    finally:
+        pub.stop()
+        _stop_bus_loop(bus, loop, t)

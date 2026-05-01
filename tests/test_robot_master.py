@@ -224,3 +224,129 @@ def test_outbound_skips_when_value_unchanged(tmp_path: Path):
         client.write_rapid_array.assert_not_called()
     finally:
         sizes.stop()
+
+
+# ---- bus-mode: origin-tag loop-back guard --------------------------------
+# Bus mode replaces the silent() context with origin tagging. When
+# _apply_inbound writes to the store with origin="robot_master", the bus
+# subscriber sees that origin in the SizesChanged payload and ignores it,
+# so the change isn't echoed back to the robot.
+
+import asyncio
+import threading
+import time
+from event_bus import EventBus
+
+
+def _bus_loop():
+    loop = asyncio.new_event_loop()
+    started = threading.Event()
+    def _run():
+        asyncio.set_event_loop(loop)
+        loop.call_soon(started.set)
+        loop.run_forever()
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    started.wait(timeout=1.0)
+    return loop, t
+
+
+def test_bus_mode_inbound_does_not_echo_back_via_origin_filter(tmp_path: Path):
+    """Apply path tags origin="robot_master"; bus subscriber filters it out.
+    No write_rapid_array calls should fire as a result of inbound polls."""
+    bus = EventBus()
+    loop, t = _bus_loop()
+    bus.start(loop)
+    sizes = SizesStore.from_config(
+        SizesConfig(db_path=str(tmp_path / "sizes.db")), bus=bus,
+    )
+    sizes.start()
+    client = _client(
+        master=[["A"]] + [[""]] * 19,
+        dims  =[[1, 2, 0]] + [[0, 0, 0]] * 19,
+    )
+    m = RobotMasterMonitor(client, sizes, poll_ms=1000, bus=bus)
+    try:
+        m.start()
+        m._poll_once()
+        # Wait for bus dispatch to settle.
+        time.sleep(0.1)
+        # The inbound apply tagged origin="robot_master"; subscriber must
+        # have ignored it — no outbound writes.
+        client.write_rapid_array.assert_not_called()
+    finally:
+        m.stop()
+        sizes.stop()
+        bus.stop()
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(timeout=2.0)
+        loop.close()
+
+
+def test_bus_mode_user_edit_pushes_to_robot(tmp_path: Path):
+    """A user edit (origin="user") IS pushed to the robot via the bus."""
+    bus = EventBus()
+    loop, t = _bus_loop()
+    bus.start(loop)
+    sizes = SizesStore.from_config(
+        SizesConfig(db_path=str(tmp_path / "sizes.db")), bus=bus,
+    )
+    sizes.start()
+    client = _client(
+        master=[[""]] * 20, dims=[[0, 0, 0]] * 20,
+    )
+    m = RobotMasterMonitor(client, sizes, poll_ms=1000, bus=bus)
+    try:
+        m.start()
+        m._poll_once()              # seed cache (all empty)
+        client.write_rapid_array.reset_mock()
+        # User edit → SizesChanged with origin="user" (default).
+        sizes.add(Size(name="Z", width_mm=100, length_mm=200,
+                       slot=5, station3=False))
+        for _ in range(50):
+            if client.write_rapid_array.called:
+                break
+            time.sleep(0.02)
+        # Bus subscriber should have pushed the new slot.
+        assert client.write_rapid_array.called
+        master_call = next(
+            c for c in client.write_rapid_array.call_args_list
+            if c.args[2] == "Master"
+        )
+        assert master_call.args[3][5] == ["Z"]
+    finally:
+        m.stop()
+        sizes.stop()
+        bus.stop()
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(timeout=2.0)
+        loop.close()
+
+
+def test_poll_once_releases_mastership_at_end(tmp_path: Path):
+    """Each poll cycle ends with an explicit release — defensive against a
+    leaked lock from a prior write whose release POST silently failed."""
+    master = [['A']] + [['']] * 19
+    dims   = [[1, 2, 0]] + [[0, 0, 0]] * 19
+    m, client, sizes = _make(tmp_path, master=master, dims=dims)
+    try:
+        m._poll_once()
+        client.release_mastership.assert_called_once()
+    finally:
+        sizes.stop()
+
+
+def test_push_slot_releases_mastership_after_writes(tmp_path: Path):
+    """After the master+dims write batch, release mastership explicitly."""
+    master = [['']] * 20
+    dims   = [[0, 0, 0]] * 20
+    m, client, sizes = _make(tmp_path, master=master, dims=dims)
+    try:
+        m._poll_once()                                # seed cache
+        m._push_slot(0, _Slot(name="X", width_mm=1, length_mm=2,
+                              station3=False))
+        # release_mastership called once per poll + once per push.
+        assert client.release_mastership.call_count >= 2
+    finally:
+        sizes.stop()
+

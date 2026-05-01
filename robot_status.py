@@ -90,10 +90,11 @@ class RobotStatus:
 class RobotMonitor:
     """Polls ABB RWS status in a background thread; publishes via callbacks."""
 
-    def __init__(self, cfg: RobotConfig, *, client: RWSClient | None = None):
+    def __init__(self, cfg: RobotConfig, *, client: RWSClient | None = None, bus=None):
         self.cfg = cfg
         # Allow tests + Main.py to share a single RWSClient across modules.
         self.client = client or RWSClient(cfg)
+        self._bus = bus
         self._status = RobotStatus()
         self._lock = threading.Lock()
         self._stop: threading.Event | None = None
@@ -101,8 +102,8 @@ class RobotMonitor:
         self._change_cbs: list[Callable[[RobotStatus], None]] = []
 
     @classmethod
-    def from_config(cls, cfg: RobotConfig) -> "RobotMonitor":
-        return cls(cfg)
+    def from_config(cls, cfg: RobotConfig, *, bus=None) -> "RobotMonitor":
+        return cls(cfg, bus=bus)
 
     # ---- lifecycle ----
 
@@ -226,6 +227,10 @@ class RobotMonitor:
                     cb(new)
                 except Exception as e:
                     log.warning("robot on_change cb failed: %s", e)
+            if self._bus is not None:
+                from events import RobotStatusChanged, signals
+                self._bus.publish(signals.robot_status_changed,
+                                  RobotStatusChanged(status=new))
 
     # GET helpers — kept as instance methods (preserved patch targets in tests)
     # but delegate to the shared RWSClient. _get_first walks via self._get so

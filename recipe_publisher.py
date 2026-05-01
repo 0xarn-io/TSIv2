@@ -8,6 +8,12 @@ Threading: notifications run on pyads's AmsRouter thread; making sync ADS
 writes from there deadlocks (response handler == caller). So the
 notification callback only enqueues; a dedicated worker thread does the
 actual plc.write off the AmsRouter.
+
+Bus mode: when an EventBus is supplied, the publisher subscribes to
+PlcSignalChanged with an alias filter (no per-alias callback ownership),
+and calls plc.ensure_published(code_alias) so the underlying ADS
+notification gets registered. Legacy mode (bus=None) keeps the original
+plc.subscribe(code_alias, cb) call.
 """
 from __future__ import annotations
 
@@ -15,6 +21,7 @@ import logging
 import queue
 import threading
 from dataclasses import dataclass
+from typing import Callable
 
 from recipes_store import Recipe, RecipesStore
 from twincat_comm  import TwinCATComm
@@ -70,11 +77,16 @@ class RecipePublisher:
         recipes: RecipesStore,
         plc: TwinCATComm,
         cfg: RecipePublisherConfig,
+        *,
+        bus=None,
     ):
         self.recipes = recipes
         self.plc = plc
         self.cfg = cfg
+        self._bus = bus
+        self._last_code: int | None = None
         self._handles: tuple[int, int] | None = None
+        self._bus_unsub: Callable[[], None] | None = None
         self._queue: queue.Queue = queue.Queue()
         self._worker: threading.Thread | None = None
         self._stop_evt = threading.Event()
@@ -95,6 +107,26 @@ class RecipePublisher:
         except Exception as e:
             log.warning("initial recipe read failed: %s", e)
 
+        if self._bus is not None:
+            self._start_bus_mode()
+        else:
+            self._start_legacy_mode()
+
+    def _start_bus_mode(self) -> None:
+        """Bus mode: ensure_published + alias-filtered bus subscription."""
+        from events import signals
+        self.plc.ensure_published(
+            self.cfg.code_alias, cycle_time_ms=self.cfg.cycle_ms,
+        )
+        self._bus_unsub = self._bus.subscribe_filtered(
+            signals.plc_signal_changed,
+            lambda p: self._queue.put(int(p.value)),
+            mode="thread",
+            alias=self.cfg.code_alias,
+        )
+
+    def _start_legacy_mode(self) -> None:
+        """Legacy mode: per-alias callback enqueues to the worker."""
         try:
             self._handles = self.plc.subscribe(
                 self.cfg.code_alias,
@@ -111,6 +143,10 @@ class RecipePublisher:
             self._handles = None
 
     def stop(self) -> None:
+        if self._bus_unsub is not None:
+            try: self._bus_unsub()
+            except Exception as e: log.warning("bus unsubscribe failed: %s", e)
+            self._bus_unsub = None
         if self._handles is not None:
             try: self.plc.unsubscribe(self._handles)
             except Exception as e: log.warning("unsubscribe code failed: %s", e)
@@ -138,6 +174,13 @@ class RecipePublisher:
                 log.exception("recipe writer crashed on code=%s", item)
 
     def _apply(self, code: int) -> None:
+        prev = self._last_code
+        if code != prev and self._bus is not None:
+            from events import RecipeCodeChanged, signals
+            self._bus.publish(signals.recipe_code_changed,
+                              RecipeCodeChanged(code=int(code), prev=prev))
+        self._last_code = int(code)
+
         if code <= 0:
             # 0 means "no selection" — don't warn, don't query the DB.
             return
@@ -146,7 +189,13 @@ class RecipePublisher:
             log.warning("recipe code %s not found in DB — no setpoints written", code)
             return
         try:
-            self.plc.write(self.cfg.setpoints_alias, _recipe_to_struct(recipe))
+            struct = _recipe_to_struct(recipe)
+            self.plc.write(self.cfg.setpoints_alias, struct)
             log.info("recipe %s pushed", code)
+            if self._bus is not None:
+                from events import RecipeSetpointsPushed, signals
+                self._bus.publish(signals.recipe_setpoints_pushed,
+                                  RecipeSetpointsPushed(code=int(code),
+                                                        values=dict(struct)))
         except Exception as e:
             log.warning("recipe setpoints write failed: %s", e)

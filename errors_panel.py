@@ -77,15 +77,24 @@ class ErrorsPanel:
     def _refresh(self) -> None:
         if self._rows_container is None:
             return
+        # The container/timer pair lives across page visits because the
+        # panel itself is a Dashboard singleton. If the user navigated
+        # away, NiceGUI deletes the previous client; the next timer tick
+        # then accesses an Element whose .client is gone and raises
+        # RuntimeError. Detect that, drop our stale refs, and stop the
+        # timer — the next page mount will create fresh ones.
+        try:
+            self._rows_container.clear()
+        except RuntimeError:
+            self._discard_stale_state()
+            return
         try:
             rows = self._fetch()
         except Exception as e:
-            self._rows_container.clear()
             with self._rows_container:
                 ui.label(f"Failed to load errors: {e}").classes("text-red-500")
             return
 
-        self._rows_container.clear()
         with self._rows_container:
             self._render_header()
             if not rows:
@@ -95,6 +104,13 @@ class ErrorsPanel:
                 return
             for r in rows:
                 self._render_row(r)
+
+    def _discard_stale_state(self) -> None:
+        self._rows_container = None
+        if self._timer is not None:
+            try: self._timer.delete()
+            except Exception: pass
+            self._timer = None
 
     def _fetch(self) -> list[dict]:
         # Substring filter on device → ad-hoc query. Otherwise use recent().

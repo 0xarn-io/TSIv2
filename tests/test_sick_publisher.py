@@ -103,6 +103,17 @@ def test_start_continues_if_initial_read_fails():
     plc.subscribe.assert_called_once()
 
 
+def test_start_continues_if_enable_subscribe_fails():
+    """Missing PLC at startup must not bring the publisher down — bridge
+    measurements still flow, only remote enable/disable is lost."""
+    pub, bridge, plc = _make_publisher()
+    plc.subscribe.side_effect = RuntimeError("ADS down")
+    pub.start()                              # must not raise
+    assert pub._enable_handles is None
+    bridge.on_measurement.assert_called_once()  # measurement path still wired
+    bridge.on_event.assert_called_once()
+
+
 def test_stop_unsubscribes_everything():
     pub, bridge, plc = _make_publisher()
     unsub_meas = MagicMock()

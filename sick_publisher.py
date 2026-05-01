@@ -60,10 +60,11 @@ def _event_to_struct(ev) -> dict:
 class SickPublisher:
     """Glue between SickBridge and TwinCATComm. No state of its own."""
 
-    def __init__(self, bridge: SickBridge, plc: TwinCATComm, cfg: PublisherConfig):
+    def __init__(self, bridge: SickBridge, plc: TwinCATComm, cfg: PublisherConfig, *, bus=None):
         self.bridge = bridge
         self.plc = plc
         self.cfg = cfg
+        self._bus = bus
         self._unsub_meas:  Callable[[], None] | None = None
         self._unsub_event: Callable[[], None] | None = None
         self._enable_handles: tuple[int, int] | None = None
@@ -82,12 +83,20 @@ class SickPublisher:
         except Exception as e:
             log.warning("initial enable read failed: %s", e)
 
-        self._enable_handles = self.plc.subscribe(
-            self.cfg.enable_alias,
-            lambda _alias, val: self._apply_enable(bool(val)),
-            cycle_time_ms=self.cfg.enable_cycle_ms,
-            on_change=True,
-        )
+        try:
+            self._enable_handles = self.plc.subscribe(
+                self.cfg.enable_alias,
+                lambda _alias, val: self._apply_enable(bool(val)),
+                cycle_time_ms=self.cfg.enable_cycle_ms,
+                on_change=True,
+            )
+        except Exception as e:
+            log.warning(
+                "enable subscription failed (%s); SICK publisher running "
+                "without remote enable/disable from '%s'",
+                e, self.cfg.enable_alias,
+            )
+            self._enable_handles = None
 
     def stop(self) -> None:
         if self._enable_handles is not None:

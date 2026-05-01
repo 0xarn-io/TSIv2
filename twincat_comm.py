@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import time
 import tomllib
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -175,15 +176,16 @@ class TwinCATConfig:
 class TwinCATComm:
     """pyads.Connection wrapper driven by a TOML var list. Supports UDTs."""
 
-    def __init__(self, config: TwinCATConfig):
+    def __init__(self, config: TwinCATConfig, *, bus=None):
         self.config = config
+        self._bus   = bus
         self._conn = pyads.Connection(config.net_id, config.port)
         # alias -> (notif_handle, user_handle)
         self._notifications: dict[str, tuple[int, int]] = {}
 
     @classmethod
-    def from_toml(cls, path: str | Path) -> "TwinCATComm":
-        return cls(TwinCATConfig.from_toml(path))
+    def from_toml(cls, path: str | Path, *, bus=None) -> "TwinCATComm":
+        return cls(TwinCATConfig.from_toml(path), bus=bus)
 
     # ---- lifecycle ------------------------------------------------------
 
@@ -310,12 +312,22 @@ class TwinCATComm:
 
         log_signals = self.config.log_signals
 
+        bus = self._bus
+
         @self._conn.notification(v.plc_type)
         def _cb(handle, name, timestamp, value):
             unpacked = self._unpack(v, value)
             if log_signals:
                 log.info("ads N %s = %s", alias, _short(unpacked))
+            # Bridge mode: fire the legacy callback first, publish second.
+            # publish() returns immediately; thread-mode subscribers
+            # offload work so the AmsRouter thread isn't blocked.
             callback(alias, unpacked)
+            if bus is not None:
+                from events import PlcSignalChanged, signals
+                bus.publish(signals.plc_signal_changed, PlcSignalChanged(
+                    alias=alias, value=unpacked, ts=time.time(),
+                ))
 
         handles = self._conn.add_device_notification(v.symbol, attr, _cb)
         self._notifications[alias] = handles
@@ -327,3 +339,41 @@ class TwinCATComm:
             if v == handles:
                 del self._notifications[k]
                 break
+
+    def ensure_published(self, alias: str, *, cycle_time_ms: int = 100) -> None:
+        """Register a bus-publishing-only ADS notification for `alias`.
+
+        Bus-mode subscribers should call this in their start() to declare
+        "I want PlcSignalChanged events for this alias" without owning a
+        per-callback subscription. The underlying `subscribe()` already
+        publishes; we just need a notification registered so the controller
+        actually fires it. Idempotent — second call for the same alias
+        returns without re-registering.
+
+        Requires `bus` to be set on the TwinCATComm — without a bus, this
+        is a no-op (the registration would publish to nowhere).
+
+        Connection-time ADS errors (PLC unreachable, missing routes) are
+        logged as warnings rather than raised. ensure_published is
+        declarative — callers say "I want events for this alias when the
+        PLC has them"; if the PLC isn't there yet, that intent is still
+        satisfied (no events, but no events is the correct answer).
+        Surfacing the error would force every caller to wrap the call,
+        and cascading the failure tears down startup of unrelated
+        components (UI, DB, robot).
+        """
+        if self._bus is None:
+            return
+        if alias in self._notifications:
+            return
+        try:
+            self.subscribe(
+                alias, lambda _a, _v: None,
+                cycle_time_ms=cycle_time_ms, on_change=True,
+            )
+        except Exception as e:
+            log.warning(
+                "ensure_published(%s) failed (%s); no PLC events will be "
+                "published for this alias until the PLC is reachable",
+                alias, e,
+            )

@@ -147,6 +147,28 @@ def test_write_rapid_returns_false_when_direct_and_mastership_unavailable():
     assert "release" not in posts
 
 
+def test_release_mastership_posts_release_endpoint():
+    """Public release endpoint hits POST /rw/mastership/edit/release."""
+    posts: list[str] = []
+    def post(url, params=None, data=None, headers=None, timeout=None):
+        posts.append(_classify(url))
+        return _ok()
+    c, _ = _client_with_mock_session(post=post)
+
+    assert c.release_mastership() is True
+    assert posts == ["release"]
+
+
+def test_release_mastership_silent_on_failure():
+    """A failed release returns False but never raises — pollers call this
+    every cycle as insurance and a network blip mustn't crash the loop."""
+    def post(url, params=None, data=None, headers=None, timeout=None):
+        return _ok(status=500, ok=False)
+    c, _ = _client_with_mock_session(post=post)
+
+    assert c.release_mastership() is False         # must not raise
+
+
 # ---- RAPID array codec ------------------------------------------------------
 
 from rws_client import format_rapid_array, parse_rapid_array
