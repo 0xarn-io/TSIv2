@@ -111,3 +111,45 @@ def test_stop_unsubscribes():
     pub.stop()
     unsub.assert_called_once()
     assert pub._unsub is None
+
+
+# ---- bus mode --------------------------------------------------------------
+
+def test_bus_mode_subscribes_via_bus_not_monitor():
+    import asyncio, time
+    from event_bus import EventBus
+    from events import RobotStatusChanged, signals
+
+    bus = EventBus()
+    loop = asyncio.new_event_loop()
+    bus.start(loop)
+    try:
+        monitor = MagicMock()
+        monitor.status.return_value = RobotStatus()
+        plc = MagicMock()
+        cfg = RobotStatusConfig(status_alias="robot.status")
+        pub = RobotPublisher(monitor, plc, cfg, bus=bus)
+        pub.start()
+        try:
+            # Boot push happened (synchronous).
+            assert plc.write.called
+            monitor.on_change.assert_not_called()
+
+            plc.write.reset_mock()
+            new = RobotStatus(
+                ctrl_state="motoron", opmode="AUTO", exec_state="running",
+                speed_ratio=100,
+            )
+            bus.publish(signals.robot_status_changed,
+                        RobotStatusChanged(status=new))
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and not plc.write.called:
+                time.sleep(0.005)
+            alias, struct = plc.write.call_args.args
+            assert alias == "robot.status"
+            assert struct["bReady"] is True
+        finally:
+            pub.stop()
+    finally:
+        bus.stop()
+        loop.close()

@@ -131,3 +131,57 @@ def test_measurement_write_swallows_errors():
     plc.write.side_effect = RuntimeError("disconnected")
     pub.start()
     pub._on_measurement({"width": 0.5, "height": 1.0, "offset": 0.0})  # no raise
+
+
+# ---- bus mode --------------------------------------------------------------
+
+def test_bus_mode_subscribes_via_bus_not_bridge():
+    """When a bus is supplied, sick_publisher receives measurements +
+    events via the bus and never calls bridge.on_measurement / on_event."""
+    import asyncio, time
+    from event_bus import EventBus
+    from events import SickMeasurement, SickUnitEvent, signals
+    from pysickudt import UnitEvent
+
+    bus = EventBus()
+    loop = asyncio.new_event_loop()
+    bus.start(loop)
+    try:
+        bridge = MagicMock()
+        plc = MagicMock()
+        plc.read.return_value = True
+        plc.subscribe.return_value = (1, 2)
+        cfg = PublisherConfig(
+            event_alias="sick.event", live_alias="sick.live",
+            enable_alias="sick.enable",
+        )
+        pub = SickPublisher(bridge, plc, cfg, bus=bus)
+        pub.start()
+        try:
+            # Bridge subscriptions NOT used in bus mode.
+            bridge.on_measurement.assert_not_called()
+            bridge.on_event.assert_not_called()
+
+            bus.publish(signals.sick_measurement,
+                        SickMeasurement(width_m=0.711, height_m=1.8,
+                                        offset_m=0.0, ts=0.0))
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and not plc.write.called:
+                time.sleep(0.005)
+            plc.write.assert_any_call(
+                "sick.live",
+                {"nWidth": 711, "nHeight": 1800, "nOffset": 0},
+            )
+
+            ev = UnitEvent(width_mean_m=0.711, length_m=0.250)
+            plc.write.reset_mock()
+            bus.publish(signals.sick_unit_event, SickUnitEvent(event=ev))
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and not plc.write.called:
+                time.sleep(0.005)
+            assert plc.write.called
+        finally:
+            pub.stop()
+    finally:
+        bus.stop()
+        loop.close()

@@ -190,3 +190,53 @@ def test_stop_removes_done_callbacks():
     pub.stop()
     unsubs[0].assert_called_once()
     unsubs[1].assert_called_once()
+
+
+# ---- bus mode --------------------------------------------------------------
+
+def test_bus_mode_subscribes_via_bus_not_plc():
+    """When a bus is supplied, camera_publisher subscribes to
+    PlcSignalChanged on the bus instead of plc.subscribe()."""
+    import asyncio, time
+    from event_bus import EventBus
+    from events import PlcSignalChanged, signals
+
+    bus = EventBus()
+    loop = asyncio.new_event_loop()
+    bus.start(loop)
+    try:
+        cameras = MagicMock()
+        cameras.panels = {"entry": MagicMock(), "exit": MagicMock()}
+        for p in cameras.panels.values():
+            p.on_snapshot_done.return_value = MagicMock()
+        plc = MagicMock()
+        triggers = [
+            CameraTriggerConfig(alias="camera.snap_entry", camera="entry"),
+            CameraTriggerConfig(alias="camera.snap_exit",  camera="exit"),
+        ]
+        pub = CameraPublisher(cameras, plc, triggers, bus=bus)
+        pub.start()
+        try:
+            plc.subscribe.assert_not_called()
+
+            # Rising edge on entry → cameras.snap("entry", ...)
+            bus.publish(signals.plc_signal_changed,
+                        PlcSignalChanged(alias="camera.snap_entry",
+                                         value=True, ts=0.0))
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and not cameras.snap.called:
+                time.sleep(0.005)
+            cameras.snap.assert_called_with("entry", source="trigger:entry")
+
+            # Falling edge: no new snap.
+            cameras.snap.reset_mock()
+            bus.publish(signals.plc_signal_changed,
+                        PlcSignalChanged(alias="camera.snap_entry",
+                                         value=False, ts=0.0))
+            time.sleep(0.05)
+            cameras.snap.assert_not_called()
+        finally:
+            pub.stop()
+    finally:
+        bus.stop()
+        loop.close()

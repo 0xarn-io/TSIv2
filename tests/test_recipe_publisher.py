@@ -45,6 +45,84 @@ def _make(initial_code: int = 0):
     return RecipePublisher(recipes, plc, cfg), recipes, plc
 
 
+# ---- bus mode ---------------------------------------------------------------
+
+def _wait_until(pred, timeout=2.0, interval=0.005):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred(): return True
+        time.sleep(interval)
+    return False
+
+
+def test_bus_mode_skips_internal_queue_and_subscribes_via_bus():
+    """When a bus is supplied, recipe_publisher does NOT spin up its
+    legacy worker thread or call plc.subscribe — the bus's mode='thread'
+    executor replaces both."""
+    import asyncio
+    from event_bus import EventBus
+    from events import PlcSignalChanged, signals
+
+    bus = EventBus()
+    loop = asyncio.new_event_loop()
+    bus.start(loop)
+    try:
+        recipes = MagicMock()
+        recipes.get.return_value = _recipe(code=5, x_topsheet_length=500)
+        plc = MagicMock()
+        plc.read.return_value = 0          # bootstrap as no-selection
+        cfg = RecipePublisherConfig(
+            code_alias="recipe.code", setpoints_alias="recipe.setpoints",
+        )
+        pub = RecipePublisher(recipes, plc, cfg, bus=bus)
+        pub.start()
+        try:
+            # No legacy plumbing in bus mode.
+            plc.subscribe.assert_not_called()
+            assert pub._worker is None
+            # Drive a code change through the bus.
+            bus.publish(signals.plc_signal_changed,
+                        PlcSignalChanged(alias="recipe.code", value=5, ts=0.0))
+            assert _wait_until(lambda: plc.write.called)
+            alias, struct = plc.write.call_args.args
+            assert alias == "recipe.setpoints"
+            assert struct["nXTopsheetLength"] == 500
+        finally:
+            pub.stop()
+    finally:
+        bus.stop()
+        loop.close()
+
+
+def test_bus_mode_ignores_unrelated_alias():
+    import asyncio
+    from event_bus import EventBus
+    from events import PlcSignalChanged, signals
+
+    bus = EventBus()
+    loop = asyncio.new_event_loop()
+    bus.start(loop)
+    try:
+        recipes = MagicMock()
+        plc = MagicMock(); plc.read.return_value = 0
+        cfg = RecipePublisherConfig(
+            code_alias="recipe.code", setpoints_alias="recipe.setpoints",
+        )
+        pub = RecipePublisher(recipes, plc, cfg, bus=bus)
+        pub.start()
+        try:
+            bus.publish(signals.plc_signal_changed,
+                        PlcSignalChanged(alias="something.else",
+                                         value=99, ts=0.0))
+            time.sleep(0.05)
+            recipes.get.assert_not_called()
+        finally:
+            pub.stop()
+    finally:
+        bus.stop()
+        loop.close()
+
+
 # ---- translation -------------------------------------------------------------
 
 def test_recipe_to_struct_maps_all_fields():

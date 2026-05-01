@@ -92,7 +92,18 @@ class RobotMasterMonitor:
     # ---- lifecycle ----------------------------------------------------------
 
     def start(self) -> None:
-        self._unsub_db = self.sizes.on_change(self._on_db_change)
+        if self._bus is not None:
+            from events import signals
+            wrapper = self._bus.subscribe(
+                signals.sizes_changed,
+                self._on_sizes_event,
+                mode="thread",
+            )
+            self._unsub_db = lambda: self._bus.unsubscribe(
+                signals.sizes_changed, wrapper,
+            )
+        else:
+            self._unsub_db = self.sizes.on_change(self._on_db_change)
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._run, daemon=True, name="robot-master",
@@ -109,6 +120,32 @@ class RobotMasterMonitor:
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
+
+    # ---- bus handler -------------------------------------------------------
+
+    def _on_sizes_event(self, payload) -> None:
+        """Handle SizesChanged from the bus by reading current state from
+        the store and reconciling. The bus payload doesn't carry the full
+        Size dataclass, so we re-read rather than rebuild."""
+        if payload.op == "delete" or payload.slot < 0:
+            self._reconcile()
+            return
+        slot = int(payload.slot)
+        if not (0 <= slot < SLOT_COUNT):
+            return
+        size = self.sizes.get_slot(slot)
+        if size is None:
+            if not self._last_robot[slot].empty:
+                self._push_slot(slot, _EMPTY_SLOT)
+            return
+        new_slot = _Slot(
+            name=size.name, width_mm=int(size.width_mm),
+            length_mm=int(size.length_mm),
+            station3=bool(size.station3),
+        )
+        if self._last_robot[slot] == new_slot:
+            return
+        self._push_slot(slot, new_slot)
 
     # ---- inbound poll (robot → DB) -----------------------------------------
 

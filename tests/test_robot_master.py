@@ -224,3 +224,47 @@ def test_outbound_skips_when_value_unchanged(tmp_path: Path):
         client.write_rapid_array.assert_not_called()
     finally:
         sizes.stop()
+
+
+# ---- bus mode --------------------------------------------------------------
+
+def test_bus_mode_subscribes_to_sizes_changed_via_bus(tmp_path: Path):
+    """When a bus is supplied, robot_master ignores sizes.on_change and
+    instead reacts to SizesChanged events on the bus."""
+    import asyncio, time
+    from event_bus import EventBus
+    from events import SizesChanged, signals
+
+    bus = EventBus()
+    loop = asyncio.new_event_loop()
+    bus.start(loop)
+    try:
+        m, client, sizes = _make(tmp_path,
+            master=[[""]] * 20, dims=[[0, 0, 0]] * 20,
+        )
+        # Use a SizesStore that publishes via the same bus.
+        sizes.stop()
+        sizes = SizesStore.from_config(
+            SizesConfig(db_path=str(tmp_path / "sizes2.db")), bus=bus,
+        )
+        sizes.start()
+        m.sizes = sizes
+        m._bus = bus
+        try:
+            m.start()
+            try:
+                # Add a row through the store; SizesChanged fires on the bus.
+                sizes.upsert_slot(0, name="A1", width_mm=500,
+                                  length_mm=1000, station3=False)
+                deadline = time.monotonic() + 2.0
+                while (time.monotonic() < deadline
+                       and not client.write_rapid_array.called):
+                    time.sleep(0.005)
+                assert client.write_rapid_array.called
+            finally:
+                m.stop()
+        finally:
+            sizes.stop()
+    finally:
+        bus.stop()
+        loop.close()

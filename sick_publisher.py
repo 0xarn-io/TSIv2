@@ -21,6 +21,11 @@ log = logging.getLogger(__name__)
 M_TO_MM = 1000
 
 
+def _bus_unsub(bus, signal, wrapper):
+    """Adapt EventBus.subscribe() return value to the legacy unsub callable."""
+    return lambda: bus.unsubscribe(signal, wrapper)
+
+
 @dataclass(frozen=True)
 class PublisherConfig:
     event_alias:     str
@@ -75,8 +80,25 @@ class SickPublisher:
             self.cfg.event_alias,
             self.cfg.enable_alias,
         ])
-        self._unsub_meas  = self.bridge.on_measurement(self._on_measurement)
-        self._unsub_event = self.bridge.on_event(self._on_event)
+        if self._bus is not None:
+            from events import signals
+            # SickMeasurement → live struct, SickUnitEvent → event struct.
+            # Mode='thread' so the PLC write happens off the receiver thread.
+            self._unsub_meas = _bus_unsub(
+                self._bus, signals.sick_measurement,
+                self._bus.subscribe(signals.sick_measurement,
+                                    lambda p: self._on_measurement_payload(p),
+                                    mode="thread"),
+            )
+            self._unsub_event = _bus_unsub(
+                self._bus, signals.sick_unit_event,
+                self._bus.subscribe(signals.sick_unit_event,
+                                    lambda p: self._on_event(p.event),
+                                    mode="thread"),
+            )
+        else:
+            self._unsub_meas  = self.bridge.on_measurement(self._on_measurement)
+            self._unsub_event = self.bridge.on_event(self._on_event)
 
         try:
             self._apply_enable(bool(self.plc.read(self.cfg.enable_alias)))
@@ -114,6 +136,12 @@ class SickPublisher:
             self.plc.write(self.cfg.live_alias, _measurement_to_struct(m))
         except Exception as e:
             log.warning("live publish failed: %s", e)
+
+    def _on_measurement_payload(self, payload) -> None:
+        # Bus payload (events.SickMeasurement) → legacy dict shape.
+        self._on_measurement({"width":  payload.width_m,
+                              "height": payload.height_m,
+                              "offset": payload.offset_m})
 
     def _on_event(self, ev) -> None:
         s = _event_to_struct(ev)

@@ -45,6 +45,7 @@ class CameraPublisher:
         self._bus = bus
         self._handles: list[tuple[int, int]] = []
         self._unsub_done: list[Callable[[], None]] = []
+        self._bus_subs: list = []
 
     def start(self) -> None:
         # Fail fast — both ends of the mapping must exist.
@@ -57,22 +58,49 @@ class CameraPublisher:
                 f"Known cameras: {sorted(self.cameras.panels)}"
             )
 
-        for t in self.triggers:
-            # Bind name in default arg so each subscription captures its own.
-            def _cb(_alias, val, name=t.camera):
-                if val:
-                    log.info("snap %s", name)
-                    self.cameras.snap(name, source=f"trigger:{name}")
+        if self._bus is not None:
+            from events import signals
+            # One subscription on PlcSignalChanged, dispatched to triggers
+            # by alias. Subscribers run in mode='thread' so cameras.snap()
+            # (which schedules onto the asyncio loop) doesn't block on the
+            # AmsRouter thread.
+            by_alias = {t.alias: t.camera for t in self.triggers}
 
-            handles = self.plc.subscribe(t.alias, _cb, on_change=True)
-            self._handles.append(handles)
+            def _on_plc(payload, by_alias=by_alias):
+                cam = by_alias.get(payload.alias)
+                if cam is None or not payload.value:
+                    return
+                log.info("snap %s", cam)
+                self.cameras.snap(cam, source=f"trigger:{cam}")
 
-            # Handshake: clear the PLC bool once the snapshot completes.
-            panel = self.cameras.panels[t.camera]
-            unsub = panel.on_snapshot_done(
-                lambda _name, _source, _ok, _path, alias=t.alias: self._ack(alias)
-            )
-            self._unsub_done.append(unsub)
+            self._bus_subs.append((
+                signals.plc_signal_changed,
+                self._bus.subscribe(signals.plc_signal_changed,
+                                    _on_plc, mode="thread"),
+            ))
+            for t in self.triggers:
+                panel = self.cameras.panels[t.camera]
+                unsub = panel.on_snapshot_done(
+                    lambda _name, _source, _ok, _path, alias=t.alias: self._ack(alias)
+                )
+                self._unsub_done.append(unsub)
+        else:
+            for t in self.triggers:
+                # Bind name in default arg so each subscription captures its own.
+                def _cb(_alias, val, name=t.camera):
+                    if val:
+                        log.info("snap %s", name)
+                        self.cameras.snap(name, source=f"trigger:{name}")
+
+                handles = self.plc.subscribe(t.alias, _cb, on_change=True)
+                self._handles.append(handles)
+
+                # Handshake: clear the PLC bool once the snapshot completes.
+                panel = self.cameras.panels[t.camera]
+                unsub = panel.on_snapshot_done(
+                    lambda _name, _source, _ok, _path, alias=t.alias: self._ack(alias)
+                )
+                self._unsub_done.append(unsub)
 
     def stop(self) -> None:
         for h in self._handles:
@@ -81,6 +109,10 @@ class CameraPublisher:
             except Exception as e:
                 log.warning("camera trigger unsubscribe failed: %s", e)
         self._handles.clear()
+        for sig, w in self._bus_subs:
+            try: self._bus.unsubscribe(sig, w)
+            except Exception: pass
+        self._bus_subs.clear()
         for u in self._unsub_done:
             u()
         self._unsub_done.clear()

@@ -61,7 +61,18 @@ class RobotPublisher:
         self.plc.validate([self.cfg.status_alias])
         # Push current state once so the struct isn't stale on PLC at boot.
         self._publish(self.monitor.status())
-        self._unsub = self.monitor.on_change(self._publish)
+        if self._bus is not None:
+            from events import signals
+            wrapper = self._bus.subscribe(
+                signals.robot_status_changed,
+                lambda payload: self._publish(payload.status),
+                mode="thread",
+            )
+            self._unsub = lambda: self._bus.unsubscribe(
+                signals.robot_status_changed, wrapper,
+            )
+        else:
+            self._unsub = self.monitor.on_change(self._publish)
 
     def stop(self) -> None:
         if self._unsub is not None:

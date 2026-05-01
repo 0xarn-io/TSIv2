@@ -77,6 +77,7 @@ class RecipePublisher:
         self.plc = plc
         self.cfg = cfg
         self._bus = bus
+        self._bus_unsub = None
         self._last_code: int | None = None
         self._handles: tuple[int, int] | None = None
         self._queue: queue.Queue = queue.Queue()
@@ -86,13 +87,36 @@ class RecipePublisher:
     def start(self) -> None:
         self.plc.validate([self.cfg.code_alias, self.cfg.setpoints_alias])
 
+        if self._bus is not None:
+            # Bus mode: the bus's mode='thread' executor replaces the
+            # internal queue+worker. Subscriber runs off the AmsRouter
+            # thread by construction.
+            from events import signals
+            wrapper = self._bus.subscribe(
+                signals.plc_signal_changed,
+                self._on_plc_signal,
+                mode="thread",
+            )
+            self._bus_unsub = lambda: self._bus.unsubscribe(
+                signals.plc_signal_changed, wrapper,
+            )
+            # Bootstrap once so the PLC isn't stale at boot. Runs on this
+            # (startup) thread, not the receiver thread — safe to block.
+            try:
+                current = int(self.plc.read(self.cfg.code_alias))
+                self._apply(current)
+            except Exception as e:
+                log.warning("initial recipe read failed: %s", e)
+            return
+
+        # Legacy mode — internal queue + worker, kept for tests / configs
+        # that don't construct an EventBus.
         self._stop_evt.clear()
         self._worker = threading.Thread(
             target=self._run, daemon=True, name="recipe-pub-writer",
         )
         self._worker.start()
 
-        # Push current recipe once so the PLC isn't stale at boot.
         try:
             current = self.plc.read(self.cfg.code_alias)
             self._queue.put(int(current))
@@ -115,6 +139,11 @@ class RecipePublisher:
             self._handles = None
 
     def stop(self) -> None:
+        if getattr(self, "_bus_unsub", None) is not None:
+            try: self._bus_unsub()
+            except Exception: pass
+            self._bus_unsub = None
+
         if self._handles is not None:
             try: self.plc.unsubscribe(self._handles)
             except Exception as e: log.warning("unsubscribe code failed: %s", e)
@@ -125,6 +154,20 @@ class RecipePublisher:
         if self._worker is not None:
             self._worker.join(timeout=2.0)
             self._worker = None
+
+    # ---- bus handler --------------------------------------------------------
+
+    def _on_plc_signal(self, payload) -> None:
+        if payload.alias != self.cfg.code_alias:
+            return
+        try:
+            code = int(payload.value)
+        except (TypeError, ValueError):
+            return
+        try:
+            self._apply(code)
+        except Exception:
+            log.exception("recipe writer crashed on code=%s", code)
 
     # ---- worker -------------------------------------------------------------
 
