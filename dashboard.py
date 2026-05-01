@@ -64,7 +64,8 @@ _TAB_SPECS: tuple[_TabSpec, ...] = (
     _TabSpec("vars",      "Vars",      "tune",                    "robot_vars",   _mount_panel),
     _TabSpec("recipes",   "Recipes",   "menu_book",               "recipes",      _mount_panel),
     _TabSpec("sizes",     "Sizes",     "straighten",              "sizes",        _mount_panel),
-    _TabSpec("errors",    "Errors",    "report_problem",          "errors",       _mount_panel),
+    # Errors tab temporarily hidden — store still runs (robot_elog mirrors into it).
+    # _TabSpec("errors",    "Errors",    "report_problem",          "errors",       _mount_panel),
     _TabSpec("robot_log", "Robot Log", "history",                 "robot_status", _mount_panel),
 )
 
