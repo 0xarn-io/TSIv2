@@ -103,14 +103,13 @@ class Dashboard:
         # they're migrated. Currently each panel still pulls from its
         # store/monitor on a UI timer.
         return cls(
-            cameras      = cameras,
-            robot        = RobotPanel(robot_monitor)            if robot_monitor      else None,
-            robot_vars   = RobotVarsPanel(robot_vars_monitor)   if robot_vars_monitor else None,
-            recipes      = RecipesPanel(recipes_store)          if recipes_store      else None,
-            sizes        = SizesPanel(sizes_store)              if sizes_store        else None,
-            errors       = ErrorsPanel(errors_store)            if errors_store       else None,
-            robot_status = RobotStatusPanel(robot_status_log)   if robot_status_log   else None,
-            title        = title,
+            cameras    = cameras,
+            robot      = RobotPanel(robot_monitor)         if robot_monitor      else None,
+            robot_vars = RobotVarsPanel(robot_vars_monitor) if robot_vars_monitor else None,
+            recipes    = RecipesPanel(recipes_store)       if recipes_store      else None,
+            sizes      = SizesPanel(sizes_store, bus=bus)  if sizes_store        else None,
+            errors     = ErrorsPanel(errors_store)         if errors_store       else None,
+            title      = title,
         )
 
     # ---- routes -------------------------------------------------------------

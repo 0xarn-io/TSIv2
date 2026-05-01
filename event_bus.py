@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Literal
 
@@ -45,7 +46,15 @@ _MISSING = object()  # sentinel: getattr default that compares unequal to everyt
 
 
 class EventBus:
-    def __init__(self) -> None:
+    def __init__(self, *, slow_handler_ms: float | None = 50.0) -> None:
+        """Construct an EventBus.
+
+        ``slow_handler_ms`` — log a WARNING when a handler dispatch
+        takes at least this many milliseconds. Catches the "accidental
+        blocking work in mode='sync' / mode='thread'" bug class.
+        Set to ``None`` to disable timing entirely (skips the
+        ``perf_counter`` call on the hot path).
+        """
         self._loop:     asyncio.AbstractEventLoop | None = None
         self._executor: ThreadPoolExecutor | None       = None
         # Strong refs to wrapper closures; blinker would otherwise GC them
@@ -54,6 +63,7 @@ class EventBus:
         self._wrappers: list[tuple[Signal, Callable]]    = []
         self._lock                                       = threading.Lock()
         self._started                                    = False
+        self._slow_ms:  float | None                     = slow_handler_ms
 
     # ── lifecycle ─────────────────────────────────────────────────────
 
@@ -196,13 +206,25 @@ class EventBus:
 
     # ── internals ─────────────────────────────────────────────────────
 
-    @staticmethod
-    def _make_sync(handler: Callable[[Any], Any]) -> Callable:
+    def _record_elapsed(self, handler: Callable, mode: str, started: float) -> None:
+        if self._slow_ms is None:
+            return
+        ms = (time.perf_counter() - started) * 1000.0
+        if ms >= self._slow_ms:
+            log.warning(
+                "EventBus slow %s handler %r took %.1f ms (threshold=%.1f ms)",
+                mode, handler, ms, self._slow_ms,
+            )
+
+    def _make_sync(self, handler: Callable[[Any], Any]) -> Callable:
         def _on(_sender, *, payload):
+            t = time.perf_counter()
             try:
                 handler(payload)
             except Exception:
                 log.exception("EventBus sync handler %r raised", handler)
+            finally:
+                self._record_elapsed(handler, "sync", t)
         return _on
 
     def _make_thread(self, handler: Callable[[Any], Any]) -> Callable:
@@ -213,10 +235,13 @@ class EventBus:
                 # no producer should be running in that window anyway.
                 return
             def _run():
+                t = time.perf_counter()
                 try:
                     handler(payload)
                 except Exception:
                     log.exception("EventBus thread handler %r raised", handler)
+                finally:
+                    self._record_elapsed(handler, "thread", t)
             try:
                 ex.submit(_run)
             except RuntimeError:
@@ -230,12 +255,18 @@ class EventBus:
             if loop is None:
                 return
             def _schedule():
+                t = time.perf_counter()
                 try:
                     result = handler(payload)
-                    if asyncio.iscoroutine(result):
-                        asyncio.create_task(_guard(handler, result))
                 except Exception:
                     log.exception("EventBus async handler %r raised", handler)
+                    self._record_elapsed(handler, "async", t)
+                    return
+                if asyncio.iscoroutine(result):
+                    # Timing spans the awaited coroutine too; finalize in _guard.
+                    asyncio.create_task(_guard(self, handler, result, t))
+                else:
+                    self._record_elapsed(handler, "async", t)
             try:
                 loop.call_soon_threadsafe(_schedule)
             except RuntimeError:
@@ -244,8 +275,10 @@ class EventBus:
         return _on
 
 
-async def _guard(handler: Callable, coro) -> None:
+async def _guard(bus: "EventBus", handler: Callable, coro, started: float) -> None:
     try:
         await coro
     except Exception:
         log.exception("EventBus async handler %r raised", handler)
+    finally:
+        bus._record_elapsed(handler, "async", started)

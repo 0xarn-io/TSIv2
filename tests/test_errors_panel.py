@@ -28,3 +28,28 @@ def test_severity_text_known_values():
 def test_severity_text_unknown_falls_back():
     assert _severity_text("debug") == "text-gray-600"
     assert _severity_text("") == "text-gray-600"
+
+
+def test_refresh_swallows_dead_client_error_and_drops_stale_state() -> None:
+    """A timer tick after the user navigated away must not crash —
+    the container's client is gone, so .clear() raises RuntimeError.
+    The panel must drop its stale refs and stop the timer so the
+    cascade doesn't repeat every tick."""
+    store = MagicMock(spec=ErrorsStore)
+    panel = ErrorsPanel(store)
+
+    dead_container = MagicMock()
+    dead_container.clear.side_effect = RuntimeError(
+        "The client this element belongs to has been deleted."
+    )
+    timer = MagicMock()
+    panel._rows_container = dead_container
+    panel._timer          = timer
+
+    panel._refresh()                              # must not raise
+
+    assert panel._rows_container is None
+    assert panel._timer is None
+    timer.delete.assert_called_once()
+    store.recent.assert_not_called()
+    store.query.assert_not_called()

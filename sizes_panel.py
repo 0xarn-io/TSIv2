@@ -4,13 +4,18 @@ Single table; rows show ID / Slot / Name / W / L / St3 plus edit/delete.
 "+ Add" opens a dialog with mm fields, station3 checkbox, and a non-stored
 inches calculator.
 
+Live updates: when an EventBus is provided, the panel subscribes to
+``sizes_changed`` and re-renders whenever the store changes — including
+inbound mirror updates from robot_master (controller edits a master).
+
 Usage in dashboard.py:
-    panel = SizesPanel(db.sizes)
+    panel = SizesPanel(db.sizes, bus=bus)
     panel.mount()                     # call inside @ui.page
 """
 from __future__ import annotations
 
 import logging
+from typing import Callable
 
 from nicegui import ui
 
@@ -32,9 +37,20 @@ def _in_to_mm(inches: int) -> int:
 class SizesPanel:
     """Admin UI for the size catalog."""
 
-    def __init__(self, store: SizesStore):
+    def __init__(self, store: SizesStore, *, bus=None):
         self.store = store
         self._container: ui.column | None = None
+        self._bus     = bus
+        self._bus_unsub: Callable[[], None] | None = None
+        if bus is not None:
+            from events import signals
+            # mode="async" — handler mutates NiceGUI elements, must run
+            # on the UI loop. Bus dispatches via call_soon_threadsafe.
+            self._bus_unsub = bus.subscription(
+                signals.sizes_changed,
+                lambda _payload: self._refresh(),
+                mode="async",
+            )
 
     # ---- top-level mount ----------------------------------------------------
 
@@ -57,7 +73,15 @@ class SizesPanel:
     def _refresh(self) -> None:
         if self._container is None:
             return
-        self._container.clear()
+        # Singleton panel + dead-client guard: a bus subscription or a
+        # button event from a navigated-away client would otherwise
+        # raise "client deleted" inside .clear(). Drop the stale ref
+        # and let the next mount() rebuild fresh.
+        try:
+            self._container.clear()
+        except RuntimeError:
+            self._container = None
+            return
         with self._container:
             self._render_header()
             try:

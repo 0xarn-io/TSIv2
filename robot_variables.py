@@ -123,9 +123,15 @@ class RobotVariablesMonitor:
         if cfg.mode != "rw":
             raise PermissionError(f"robot var '{alias}' is read-only")
         encoded = _encode(cfg, value)
-        ok = self.client.write_rapid(cfg.task, cfg.module, cfg.symbol, encoded)
-        if not ok:
-            raise RuntimeError(f"RWS write failed for '{alias}'")
+        try:
+            ok = self.client.write_rapid(cfg.task, cfg.module, cfg.symbol, encoded)
+            if not ok:
+                raise RuntimeError(f"RWS write failed for '{alias}'")
+        finally:
+            # write_rapid releases internally with silent=True; if that
+            # release POST failed we'd hold the lock and block the HMI.
+            # Explicit release as a final safety net.
+            self.client.release_mastership()
         # Update the local cache immediately; the next poll will confirm.
         self._observe(cfg, _coerce(cfg, encoded))
 

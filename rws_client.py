@@ -258,6 +258,22 @@ class RWSClient:
         r = self.post(f"/rw/mastership/edit/{action}", silent=silent)
         return bool(r is not None and r.ok)
 
+    def release_mastership(self) -> bool:
+        """Public: best-effort release of edit mastership.
+
+        write_rapid() already releases inside its finally block, but the
+        release POST itself can silently fail (network blip, retry-budget
+        exhausted) — we'd then hold the lock forever and the HMI / other
+        clients can't write.
+
+        Pollers that read in steady state are encouraged to call this at
+        the end of each cycle as insurance: it's idempotent (a release
+        when nothing is held returns False harmlessly) and adds one HTTP
+        round-trip per poll. Cheap defense against a real symptom on the
+        FlexPendant ("Failed to get Mastership").
+        """
+        return self._mastership("release", silent=True)
+
 
 # ---- module helpers --------------------------------------------------------
 
