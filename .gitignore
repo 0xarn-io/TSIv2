@@ -5,8 +5,10 @@ __pycache__/
 .env
 
 # Runtime data — never commit. Schemas are recreated on startup.
+data/*
 data/*.db
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
 data/snapshots/
+data/snapshots/*.jpg
