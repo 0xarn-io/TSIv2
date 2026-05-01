@@ -255,7 +255,7 @@ def test_daily_summary_aggregates_today(tmp_path: Path):
         # The schema columns we care about exist with non-negative values.
         for col in ("auto_minutes", "manr_minutes", "manf_minutes",
                     "running_minutes", "motors_on_minutes",
-                    "estop_minutes"):
+                    "estop_minutes", "bypass_minutes"):
             assert today[col] is not None
             assert today[col] >= 0
         assert today["num_stops"] >= 0
@@ -278,12 +278,10 @@ def test_shift_summary_returns_three_rows_with_labels(tmp_path: Path):
         assert len(rows) == 3
         assert [r["shift"] for r in rows] == ["S1 06–14", "S2 14–22", "S3 22–06"]
         for r in rows:
-            for col in ("auto_minutes", "manr_minutes", "manf_minutes",
-                        "running_minutes", "motors_on_minutes",
-                        "estop_minutes", "total_minutes"):
+            for col in ("ready_minutes", "enabled_minutes",
+                        "bypass_minutes", "estop_minutes", "total_minutes"):
                 assert r[col] is not None
                 assert r[col] >= 0
-            assert r["num_stops"] >= 0
             # start_ts < end_ts and both are in the right calendar day(s).
             assert r["start_ts"] < r["end_ts"]
     finally:
@@ -304,13 +302,13 @@ def test_shift_summary_attributes_estop_minutes(tmp_path: Path):
             c.executemany(
                 """INSERT INTO robot_status_log
                    (ts, opmode, ctrl_state, exec_state, speed_ratio,
-                    is_ready, source)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    is_ready, bypass, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     (f"{today} 07:00:00", "AUTO", "emergencystop",
-                     "stopped", 0, 0, "change"),
+                     "stopped", 0, 0, 0, "change"),
                     (f"{today} 07:30:00", "AUTO", "motoron",
-                     "running", 100, 1, "change"),
+                     "running", 100, 1, 0, "change"),
                 ],
             )
             c.commit()
@@ -321,6 +319,135 @@ def test_shift_summary_attributes_estop_minutes(tmp_path: Path):
         # S2 should see no estop time.
         s2 = next(r for r in rows if r["shift"].startswith("S2"))
         assert s2["estop_minutes"] == 0
+    finally:
+        s.stop()
+
+
+def test_shift_summary_attributes_bypass_minutes(tmp_path: Path):
+    """A span with bypass=1 inside a shift window must be attributed to
+    `bypass_minutes`; while bypass=0 spans land in `enabled_minutes`."""
+    from datetime import datetime
+    s = _store(tmp_path, tick_period_s=0)
+    s.start()
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        with sqlite3.connect(s.cfg.db_path) as c:
+            c.executemany(
+                """INSERT INTO robot_status_log
+                   (ts, opmode, ctrl_state, exec_state, speed_ratio,
+                    is_ready, bypass, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (f"{today} 07:00:00", "AUTO", "motoron",
+                     "running", 100, 1, 1, "change"),
+                    (f"{today} 07:30:00", "AUTO", "motoron",
+                     "running", 100, 1, 0, "change"),
+                ],
+            )
+            c.commit()
+        rows = s.shift_summary(today)
+        s1 = next(r for r in rows if r["shift"].startswith("S1"))
+        # Roughly 30 min of bypass; the rest of S1 is enabled.
+        assert s1["bypass_minutes"] >= 25
+        assert s1["enabled_minutes"] > s1["bypass_minutes"]
+    finally:
+        s.stop()
+
+
+def test_bypass_column_persisted_via_bus(tmp_path: Path, bus):
+    """Publishing plc_signal_changed for the configured alias should
+    flip the cached bypass flag and the next robot_status_changed row
+    must carry bypass=1."""
+    from events import PlcSignalChanged, RobotStatusChanged, signals
+    from robot_status import RobotStatus
+
+    s = _store(tmp_path, bus=bus, tick_period_s=0,
+               bypass_alias="robot.bypass")
+    s.start()
+    try:
+        bus.publish(
+            signals.plc_signal_changed,
+            PlcSignalChanged(alias="robot.bypass", value=True, ts=0.0),
+        )
+        # Wait for the bypass-row to drain (the handler enqueues one).
+        _drain(s, 1)
+
+        bus.publish(
+            signals.robot_status_changed,
+            RobotStatusChanged(status=RobotStatus(opmode="AUTO")),
+        )
+        _drain(s, 2)
+
+        rows = s.recent(limit=5)
+        assert len(rows) >= 2
+        # The freshest row is from the robot_status_changed publish above.
+        latest = rows[0]
+        assert latest["bypass"] == 1
+    finally:
+        s.stop()
+
+
+def test_bypass_alias_unset_skips_subscription(tmp_path: Path, bus):
+    """When `bypass_alias` is None, plc_signal_changed publishes for any
+    alias must be ignored — the bypass column stays 0."""
+    from events import PlcSignalChanged, signals
+    from robot_status import RobotStatus
+
+    s = _store(tmp_path, bus=bus, tick_period_s=0, bypass_alias=None)
+    s.start()
+    try:
+        bus.publish(
+            signals.plc_signal_changed,
+            PlcSignalChanged(alias="robot.bypass", value=True, ts=0.0),
+        )
+        time.sleep(0.2)
+        # No bypass-driven row should land.
+        assert s.recent() == []
+        # And a normal status change still records bypass=0.
+        from events import RobotStatusChanged
+        bus.publish(
+            signals.robot_status_changed,
+            RobotStatusChanged(status=RobotStatus(opmode="AUTO")),
+        )
+        _drain(s, 1)
+        assert s.recent()[0]["bypass"] == 0
+    finally:
+        s.stop()
+
+
+def test_alter_table_migration_adds_bypass_column(tmp_path: Path):
+    """A pre-bypass DB file (no `bypass` column) must gain the column
+    on next start() without losing rows."""
+    db_path = tmp_path / "rsl.db"
+    with sqlite3.connect(db_path) as c:
+        c.executescript("""
+            CREATE TABLE robot_status_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts           TEXT    NOT NULL DEFAULT (datetime('now')),
+                opmode       TEXT    NOT NULL,
+                ctrl_state   TEXT    NOT NULL,
+                exec_state   TEXT    NOT NULL,
+                speed_ratio  INTEGER NOT NULL,
+                is_ready     INTEGER NOT NULL,
+                source       TEXT    NOT NULL
+            );
+        """)
+        c.execute(
+            "INSERT INTO robot_status_log "
+            "(opmode, ctrl_state, exec_state, speed_ratio, is_ready, source) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("AUTO", "motoron", "running", 100, 1, "change"),
+        )
+        c.commit()
+
+    s = _store(tmp_path, tick_period_s=0)
+    s.start()
+    try:
+        # The legacy row is preserved with bypass defaulted to 0.
+        rows = s.recent()
+        assert len(rows) == 1
+        assert rows[0]["bypass"] == 0
+        assert rows[0]["opmode"] == "AUTO"
     finally:
         s.stop()
 
