@@ -20,6 +20,7 @@ from recipe_publisher import RecipePublisherConfig
 from recipes_store    import RecipesConfig
 from robot_publisher  import RobotStatusConfig
 from robot_status     import RobotConfig
+from robot_status_log  import RobotStatusLogConfig
 from robot_variables  import RobotVariableConfig
 from sick_publisher   import PublisherConfig
 from sizes_store      import SizesConfig
@@ -66,6 +67,7 @@ class AppConfig:
     unit_log:   UnitLoggerConfig | None
     errors_log: ErrorsConfig | None
     snapshots:  SnapshotArchiveConfig | None
+    robot_status_log: RobotStatusLogConfig | None
 
     @classmethod
     def load(cls, path: str | Path) -> "AppConfig":
@@ -118,6 +120,10 @@ class AppConfig:
             snapshots=(
                 SnapshotArchiveConfig(**d["snapshots"])
                 if "snapshots" in d else None
+            ),
+            robot_status_log=(
+                RobotStatusLogConfig(**d["robot_status_log"])
+                if "robot_status_log" in d else None
             ),
         )
 

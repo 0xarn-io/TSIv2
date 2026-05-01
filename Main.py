@@ -90,7 +90,7 @@ robot     = RobotMonitor.from_config(cfg.robot, bus=bus) if cfg.robot else None
 robot_pub = (RobotPublisher(robot, plc, cfg.plc.robot_status, bus=bus)
              if robot and cfg.plc.robot_status else None)
 db        = DBOrchestrator.from_config(
-    cfg, plc=plc, bridge=bridge, archive=archive, bus=bus,
+    cfg, plc=plc, bridge=bridge, archive=archive, bus=bus, robot=robot,
 )
 robot_vars = (
     RobotVariablesMonitor(
@@ -137,6 +137,7 @@ dashboard = Dashboard.build(
     recipes_store      = db.recipes,
     sizes_store        = db.sizes,
     errors_store       = db.errors,
+    robot_status_log   = db.robot_status_log,
     title              = cfg.ui.title,
     bus                = bus,
 )

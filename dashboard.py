@@ -21,18 +21,20 @@ from typing import Callable
 
 from nicegui import ui
 
-from camera_panel     import CameraManager
-from errors_panel     import ErrorsPanel
-from errors_store     import ErrorsStore
-from recipes_panel    import RecipesPanel
-from recipes_store    import RecipesStore
-from robot_panel      import RobotPanel
-from robot_status     import RobotMonitor
-from robot_variables  import RobotVariablesMonitor
-from robot_vars_panel import RobotVarsPanel
-from sizes_panel      import SizesPanel
-from sizes_store      import SizesStore
-from theme            import apply_theme, card, warak_header
+from camera_panel       import CameraManager
+from errors_panel       import ErrorsPanel
+from errors_store       import ErrorsStore
+from recipes_panel      import RecipesPanel
+from recipes_store      import RecipesStore
+from robot_panel        import RobotPanel
+from robot_status       import RobotMonitor
+from robot_status_log   import RobotStatusLog
+from robot_status_panel import RobotStatusPanel
+from robot_variables    import RobotVariablesMonitor
+from robot_vars_panel   import RobotVarsPanel
+from sizes_panel        import SizesPanel
+from sizes_store        import SizesStore
+from theme              import apply_theme, card, warak_header
 
 log = logging.getLogger(__name__)
 
@@ -57,12 +59,14 @@ def _mount_panel(panel) -> None:
 
 
 _TAB_SPECS: tuple[_TabSpec, ...] = (
-    _TabSpec("cameras",   "Cameras", "videocam",                "cameras",   _mount_cameras),
-    _TabSpec("robot",     "Robot",   "precision_manufacturing", "robot",     _mount_panel),
-    _TabSpec("vars",      "Vars",    "tune",                    "robot_vars",_mount_panel),
-    _TabSpec("recipes",   "Recipes", "menu_book",               "recipes",   _mount_panel),
-    _TabSpec("sizes",     "Sizes",   "straighten",              "sizes",     _mount_panel),
-    _TabSpec("errors",    "Errors",  "report_problem",          "errors",    _mount_panel),
+    _TabSpec("cameras",   "Cameras",   "videocam",                "cameras",      _mount_cameras),
+    _TabSpec("robot",     "Robot",     "precision_manufacturing", "robot",        _mount_panel),
+    _TabSpec("vars",      "Vars",      "tune",                    "robot_vars",   _mount_panel),
+    _TabSpec("recipes",   "Recipes",   "menu_book",               "recipes",      _mount_panel),
+    _TabSpec("sizes",     "Sizes",     "straighten",              "sizes",        _mount_panel),
+    # Errors tab temporarily hidden — store still runs (robot_elog mirrors into it).
+    # _TabSpec("errors",    "Errors",    "report_problem",          "errors",       _mount_panel),
+    _TabSpec("robot_log", "Robot Log", "history",                 "robot_status", _mount_panel),
 )
 
 
@@ -70,13 +74,14 @@ _TAB_SPECS: tuple[_TabSpec, ...] = (
 class Dashboard:
     """Composition root for the UI. Build via `Dashboard.build(...)`."""
 
-    cameras:    CameraManager   | None = None
-    robot:      RobotPanel      | None = None
-    robot_vars: RobotVarsPanel  | None = None
-    recipes:    RecipesPanel    | None = None
-    sizes:      SizesPanel      | None = None
-    errors:     ErrorsPanel     | None = None
-    title:      str             = "TSI Gen 1.5"
+    cameras:      CameraManager     | None = None
+    robot:        RobotPanel        | None = None
+    robot_vars:   RobotVarsPanel    | None = None
+    recipes:      RecipesPanel      | None = None
+    sizes:        SizesPanel        | None = None
+    errors:       ErrorsPanel       | None = None
+    robot_status: RobotStatusPanel  | None = None
+    title:        str               = "TSI Gen 1.5"
 
     # ---- builder ------------------------------------------------------------
 
@@ -90,6 +95,7 @@ class Dashboard:
         recipes_store:      RecipesStore           | None = None,
         sizes_store:        SizesStore             | None = None,
         errors_store:       ErrorsStore            | None = None,
+        robot_status_log:   RobotStatusLog         | None = None,
         title:              str = "TSI Gen 1.5",
         bus                                        = None,
     ) -> "Dashboard":
