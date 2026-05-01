@@ -20,7 +20,17 @@ not constructing the Dashboard.
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
+
+# Project modules now live under topical subdirs (core/, plc/, robot/, stores/,
+# ui/, camera/) but imports stay flat (`from event_bus import EventBus`) — we
+# kept it that way to avoid a rename storm across ~60 files. Extend sys.path
+# here so flat imports resolve when `python Main.py` runs from any cwd. The
+# pytest equivalent lives in pyproject.toml [tool.pytest.ini_options].
+_ROOT = Path(__file__).resolve().parent
+for _sub in ("core", "plc", "robot", "stores", "ui", "camera"):
+    sys.path.insert(0, str(_ROOT / _sub))
 
 from nicegui import app, ui
 
@@ -69,7 +79,7 @@ from twincat_comm     import TwinCATComm
 
 # ─── config ───────────────────────────────────────────────────────────────────
 
-cfg = AppConfig.load(Path(__file__).with_name("app_config.toml"))
+cfg = AppConfig.load(_ROOT / "config" / "app_config.toml")
 
 
 # ─── build (data + hardware) ─────────────────────────────────────────────────
