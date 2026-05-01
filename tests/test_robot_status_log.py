@@ -203,22 +203,69 @@ def test_recent_filter_by_opmode(tmp_path: Path):
         s.stop()
 
 
-def test_time_in_state_returns_per_opmode_seconds(tmp_path: Path):
+def test_time_in_state_returns_safety_categories(tmp_path: Path):
+    """time_in_state buckets spans into estop / bypass / enabled
+    (mutually exclusive, severity-ranked) rather than by opmode."""
     s = _store(tmp_path, tick_period_s=0)
     s.start()
     try:
-        _seed(s, [
-            ("AUTO", "motoron", "running", 100),
-            ("MANR", "motoron", "stopped",  25),
-            ("AUTO", "motoron", "running", 100),
-        ])
-        # Window covering everything.
-        rows = s.time_in_state("1970-01-01 00:00:00")
-        opmodes = {r["opmode"] for r in rows}
-        assert "AUTO" in opmodes
-        # All rows have non-negative durations.
-        for r in rows:
-            assert (r.get("seconds") or 0) >= 0
+        with sqlite3.connect(s.cfg.db_path) as c:
+            c.executemany(
+                """INSERT INTO robot_status_log
+                   (ts, opmode, ctrl_state, exec_state, speed_ratio,
+                    is_ready, bypass, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    # 30 min enabled, then 30 min bypass, then 30 min estop.
+                    ("2025-01-01 06:00:00", "AUTO", "motoron",
+                     "running", 100, 1, 0, "change"),
+                    ("2025-01-01 06:30:00", "AUTO", "motoron",
+                     "running", 100, 1, 1, "change"),
+                    ("2025-01-01 07:00:00", "AUTO", "emergencystop",
+                     "stopped", 0, 0, 1, "change"),
+                    ("2025-01-01 07:30:00", "AUTO", "motoron",
+                     "running", 100, 1, 0, "change"),
+                ],
+            )
+            c.commit()
+
+        rows = s.time_in_state("2025-01-01 06:00:00")
+        states = {r["state"]: r["seconds"] for r in rows}
+        # All three categories present, all non-negative.
+        assert set(states.keys()).issuperset({"estop", "bypass", "enabled"})
+        for v in states.values():
+            assert v >= 0
+        # Returned in severity order: estop, bypass, enabled.
+        assert [r["state"] for r in rows[:3]] == ["estop", "bypass", "enabled"]
+    finally:
+        s.stop()
+
+
+def test_time_in_state_estop_wins_over_bypass(tmp_path: Path):
+    """A span that is both estop and bypass must be attributed to estop —
+    estop dominates because it's a stricter safety condition."""
+    s = _store(tmp_path, tick_period_s=0)
+    s.start()
+    try:
+        with sqlite3.connect(s.cfg.db_path) as c:
+            c.executemany(
+                """INSERT INTO robot_status_log
+                   (ts, opmode, ctrl_state, exec_state, speed_ratio,
+                    is_ready, bypass, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    ("2025-01-01 06:00:00", "AUTO", "emergencystop",
+                     "stopped", 0, 0, 1, "change"),
+                    ("2025-01-01 06:30:00", "AUTO", "motoron",
+                     "running", 100, 1, 0, "change"),
+                ],
+            )
+            c.commit()
+
+        rows = s.time_in_state("2025-01-01 06:00:00")
+        seen = {r["state"]: r["seconds"] for r in rows}
+        assert seen.get("estop", 0) >= 25 * 60      # ~30 min estop
+        assert seen.get("bypass", 0) == 0
     finally:
         s.stop()
 
