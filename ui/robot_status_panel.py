@@ -298,21 +298,18 @@ class RobotStatusPanel:
 
         box.clear()
         with box:
-            if not rows:
-                ui.label("No data in window.").classes(
-                    "text-gray-500 italic px-3 py-4"
-                )
-                return
-
-            total = max(sum(r.get("seconds") or 0 for r in rows), 1.0)
+            # Always render the three canonical categories in severity
+            # order — operators expect a fixed shape so they can scan
+            # to "is bypass non-zero?" without hunting. Categories
+            # missing from the SQL result mean 0 seconds in the window.
+            by_state = {(r.get("state") or ""): float(r.get("seconds") or 0)
+                        for r in rows}
+            total = max(sum(by_state.values()), 1.0)
             with ui.column().classes("w-full gap-2 p-2"):
-                for r in rows:
-                    secs = float(r.get("seconds") or 0)
+                for state in ("estop", "bypass", "enabled"):
+                    secs = by_state.get(state, 0.0)
                     pct  = secs / total * 100.0
-                    state = r.get("state") or "unknown"
-                    bar_color, label_class = _STATE_BAR_STYLE.get(
-                        state, ("#0053A1", "text-gray-700")
-                    )
+                    bar_color, label_class = _STATE_BAR_STYLE[state]
                     with ui.row().classes("w-full items-center gap-3"):
                         ui.label(state.upper()).classes(
                             f"w-24 font-semibold text-sm {label_class}"
