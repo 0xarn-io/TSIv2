@@ -235,3 +235,102 @@ def test_subscribe_filtered_no_filters_passes_all_payloads(bus):
     bus.publish(sig, "a")
     bus.publish(sig, "b")
     assert seen == ["a", "b"]
+
+
+# ─── slow-handler timing ──────────────────────────────────────────────────────
+
+def test_slow_sync_handler_logs_warning(caplog):
+    """A sync handler that exceeds the threshold logs a WARNING."""
+    import logging
+    bus = EventBus(slow_handler_ms=5.0)
+    sig = Signal()
+    def slow(_p):
+        time.sleep(0.020)                  # 20ms ≫ 5ms threshold
+    bus.subscribe(sig, slow, mode="sync")
+    with caplog.at_level(logging.WARNING, logger="event_bus"):
+        bus.publish(sig, None)
+    msgs = [r.message for r in caplog.records]
+    assert any("slow sync handler" in m for m in msgs), msgs
+    bus.stop()
+
+
+def test_fast_handler_does_not_log(caplog):
+    """A handler that finishes well under threshold stays silent."""
+    import logging
+    bus = EventBus(slow_handler_ms=50.0)
+    sig = Signal()
+    bus.subscribe(sig, lambda _p: None, mode="sync")
+    with caplog.at_level(logging.WARNING, logger="event_bus"):
+        bus.publish(sig, None)
+    assert not any("slow" in r.message for r in caplog.records)
+    bus.stop()
+
+
+def test_slow_thread_handler_logs_warning(caplog):
+    """Thread-mode handler exceeding threshold logs after the worker runs."""
+    import logging
+    bus = EventBus(slow_handler_ms=5.0)
+    loop = asyncio.new_event_loop()
+    try:
+        bus.start(loop)
+        sig = Signal()
+        done = threading.Event()
+        def slow(_p):
+            time.sleep(0.020)
+            done.set()
+        bus.subscribe(sig, slow, mode="thread")
+        with caplog.at_level(logging.WARNING, logger="event_bus"):
+            bus.publish(sig, None)
+            assert done.wait(2.0), "handler never ran"
+            # The warning is emitted inside the worker after handler returns;
+            # give logging a beat in case it lands after done.set().
+            assert _wait(lambda: any(
+                "slow thread handler" in r.message for r in caplog.records
+            ))
+    finally:
+        bus.stop()
+        loop.close()
+
+
+def test_slow_async_handler_logs_warning(caplog):
+    """Async-mode coroutine exceeding threshold logs after the await completes."""
+    import logging
+    bus = EventBus(slow_handler_ms=5.0)
+    loop = asyncio.new_event_loop()
+    try:
+        bus.start(loop)
+        sig = Signal()
+        done = threading.Event()
+        async def slow(_p):
+            await asyncio.sleep(0.020)
+            done.set()
+        bus.subscribe(sig, slow, mode="async")
+
+        async def _drive():
+            bus.publish(sig, None)
+            for _ in range(50):                # ≤500ms total
+                if done.is_set(): break
+                await asyncio.sleep(0.01)
+
+        with caplog.at_level(logging.WARNING, logger="event_bus"):
+            loop.run_until_complete(_drive())
+        assert any(
+            "slow async handler" in r.message for r in caplog.records
+        ), [r.message for r in caplog.records]
+    finally:
+        bus.stop()
+        loop.close()
+
+
+def test_slow_handler_disabled_when_threshold_is_none(caplog):
+    """slow_handler_ms=None disables timing entirely."""
+    import logging
+    bus = EventBus(slow_handler_ms=None)
+    sig = Signal()
+    def slow(_p):
+        time.sleep(0.020)
+    bus.subscribe(sig, slow, mode="sync")
+    with caplog.at_level(logging.WARNING, logger="event_bus"):
+        bus.publish(sig, None)
+    assert not any("slow" in r.message for r in caplog.records)
+    bus.stop()
