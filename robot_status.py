@@ -137,9 +137,20 @@ class RobotMonitor:
         limit: int = 50,
         include_info: bool = False,
     ) -> list[dict]:
-        """One-shot event-log pull. Returns a list of dicts (warnings + errors)."""
-        obj = self._get(f"/rw/elog/{domain}", params={"lang": "en", "lim": limit})
-        if not obj:
+        """One-shot event-log pull. Returns a list of dicts (warnings + errors).
+
+        Some controllers occasionally emit a malformed JSON elog batch
+        (an event message contains an unescaped quote/backslash). Halve
+        the limit and retry rather than dropping the whole tick.
+        """
+        path = f"/rw/elog/{domain}"
+        obj = self._get(path, params={"lang": "en", "lim": limit}, silent=True)
+        if obj is None and limit > 4:
+            # Retry with a smaller window — usually skips the bad event.
+            smaller = max(4, limit // 4)
+            obj = self._get(path, params={"lang": "en", "lim": smaller}, silent=True)
+        if obj is None:
+            log.warning("RWS GET %s failed (lim=%s): malformed response", path, limit)
             return []
         items = obj.get("_embedded", {}).get("resources", [])
         TYPES = {"1": "INFO", "2": "WARN", "3": "ERROR"}
