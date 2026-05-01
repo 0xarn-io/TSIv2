@@ -151,7 +151,7 @@ class RWSClient:
             )
 
         # Direct write failed. Try acquire-master, retry, release.
-        if not self._mastership("request", silent=True):
+        if not self._mastership("request"):
             return False
         try:
             r2 = self.post(path, data={"value": value}, silent=True)
