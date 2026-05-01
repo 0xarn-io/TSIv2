@@ -163,6 +163,10 @@ class RobotMasterMonitor:
                                        "station3": s.station3}
                                       for s in slots
                                   ]))
+        # Belt-and-suspenders: drop any mastership lingering from a prior
+        # write whose release POST silently failed. Without this, the
+        # FlexPendant HMI can't acquire master to edit slotselector.
+        self.client.release_mastership()
 
     def _read_robot(self) -> list[_Slot] | None:
         # The bulk /data endpoint refuses these arrays on OmniCore (large
@@ -342,4 +346,10 @@ class RobotMasterMonitor:
         except Exception as e:
             log.warning("robot master push failed slot=%d: %s", slot, e)
             return
+        finally:
+            # Each write_rapid releases inside its own finally block, but
+            # do an explicit final release after the batch as insurance —
+            # write_rapid uses silent=True, so a failed release would
+            # silently leak the lock and block the FlexPendant HMI.
+            self.client.release_mastership()
         self._last_robot[slot] = new_slot

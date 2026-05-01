@@ -321,3 +321,32 @@ def test_bus_mode_user_edit_pushes_to_robot(tmp_path: Path):
         loop.call_soon_threadsafe(loop.stop)
         t.join(timeout=2.0)
         loop.close()
+
+
+def test_poll_once_releases_mastership_at_end(tmp_path: Path):
+    """Each poll cycle ends with an explicit release — defensive against a
+    leaked lock from a prior write whose release POST silently failed."""
+    master = [['A']] + [['']] * 19
+    dims   = [[1, 2, 0]] + [[0, 0, 0]] * 19
+    m, client, sizes = _make(tmp_path, master=master, dims=dims)
+    try:
+        m._poll_once()
+        client.release_mastership.assert_called_once()
+    finally:
+        sizes.stop()
+
+
+def test_push_slot_releases_mastership_after_writes(tmp_path: Path):
+    """After the master+dims write batch, release mastership explicitly."""
+    master = [['']] * 20
+    dims   = [[0, 0, 0]] * 20
+    m, client, sizes = _make(tmp_path, master=master, dims=dims)
+    try:
+        m._poll_once()                                # seed cache
+        m._push_slot(0, _Slot(name="X", width_mm=1, length_mm=2,
+                              station3=False))
+        # release_mastership called once per poll + once per push.
+        assert client.release_mastership.call_count >= 2
+    finally:
+        sizes.stop()
+
