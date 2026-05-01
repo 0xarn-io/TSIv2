@@ -339,3 +339,25 @@ class TwinCATComm:
             if v == handles:
                 del self._notifications[k]
                 break
+
+    def ensure_published(self, alias: str, *, cycle_time_ms: int = 100) -> None:
+        """Register a bus-publishing-only ADS notification for `alias`.
+
+        Bus-mode subscribers should call this in their start() to declare
+        "I want PlcSignalChanged events for this alias" without owning a
+        per-callback subscription. The underlying `subscribe()` already
+        publishes; we just need a notification registered so the controller
+        actually fires it. Idempotent — second call for the same alias
+        returns without re-registering.
+
+        Requires `bus` to be set on the TwinCATComm — without a bus, this
+        is a no-op (the registration would publish to nowhere).
+        """
+        if self._bus is None:
+            return
+        if alias in self._notifications:
+            return
+        self.subscribe(
+            alias, lambda _a, _v: None,
+            cycle_time_ms=cycle_time_ms, on_change=True,
+        )
