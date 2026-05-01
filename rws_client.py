@@ -133,25 +133,26 @@ class RWSClient:
     ) -> bool:
         """Write a RAPID symbol value.
 
-        Strategy: try the data POST directly first. On OmniCore in AUTO
-        mode the configured RWS user typically has implicit edit
-        privilege, so the write succeeds without mastership. Only fall
-        back to acquire-then-retry if the direct write fails — and even
-        then, only if mastership probing actually finds a working URI
-        (some firmwares reject every shape we know).
+        Strategy: try the data POST directly first. If the firmware grants
+        implicit edit privilege to the configured user, this succeeds and
+        we skip the mastership round-trip entirely. Otherwise it fails
+        with -4501 ("no master") and we fall back to acquire-retry-release.
+        Only the final outcome is logged — the optimistic 403 is expected
+        on firmwares that require explicit mastership (e.g. RW 7.21).
         """
         path = self._rapid_path(task, module, symbol, "data")
         r = self.post(path, data={"value": value}, silent=True)
         if r is not None and r.ok:
             return True
-        if r is not None:
-            log.warning(
-                "rapid write %s -> %s %s",
-                path, r.status_code, (r.text or "")[:200].strip(),
-            )
+        direct_err = (
+            None if r is None
+            else f"{r.status_code} {(r.text or '')[:200].strip()}"
+        )
 
-        # Direct write failed. Try acquire-master, retry, release.
-        if not self._mastership("request", silent=True):
+        # Direct write didn't go through. Try acquire-master, retry, release.
+        if not self._mastership("request"):
+            if direct_err:
+                log.warning("rapid write %s -> %s", path, direct_err)
             return False
         try:
             r2 = self.post(path, data={"value": value}, silent=True)
@@ -162,6 +163,8 @@ class RWSClient:
                     "rapid write (with master) %s -> %s %s",
                     path, r2.status_code, (r2.text or "")[:200].strip(),
                 )
+            elif direct_err:
+                log.warning("rapid write %s -> %s", path, direct_err)
             return False
         finally:
             self._mastership("release", silent=True)
@@ -244,54 +247,16 @@ class RWSClient:
 
     # ---- mastership helpers ------------------------------------------------
 
-    # OmniCore mastership URI varies by firmware; we probe on first call
-    # and lock onto whichever shape the controller accepts.
-    _MASTERSHIP_PROBES: tuple[tuple[str, dict | None, dict | None], ...] = (
-        # (path, query_params, body_data) — params merged with action
-        ("/rw/mastership/edit", {"action": "$"}, None),
-        ("/rw/mastership",      {"action": "$"}, None),
-        ("/rw/mastership/edit", None,            {"action": "$"}),
-        ("/rw/mastership",      None,            {"action": "$"}),
-    )
-    _mastership_uri: tuple[str, dict | None, dict | None] | None = None
-
     def _mastership(self, action: str, *, silent: bool = False) -> bool:
-        """Request or release edit mastership. Probes URI shapes on first
-        call and locks onto whichever the controller accepts.
+        """Acquire or release edit mastership.
+
+        OmniCore (v250xt / RW 7.x) uses path-style action — the action
+        verb lives at the end of the URI, not in a query/body param:
+            POST /rw/mastership/edit/request
+            POST /rw/mastership/edit/release
         """
-        def fill(template):
-            if template is None:
-                return None
-            return {k: (action if v == "$" else v) for k, v in template.items()}
-
-        if self._mastership_uri is not None:
-            path, q, b = self._mastership_uri
-            r = self.post(path, params=fill(q), data=fill(b), silent=silent)
-            return bool(r is not None and r.ok)
-
-        attempts: list[str] = []
-        for path, q, b in self._MASTERSHIP_PROBES:
-            r = self.post(path, params=fill(q), data=fill(b), silent=True)
-            if r is not None and r.ok:
-                self._mastership_uri = (path, q, b)
-                log.info(
-                    "mastership: locked onto %s (%s)", path,
-                    "query" if q else "body",
-                )
-                return True
-            if r is None:
-                summary = "no response"
-            else:
-                summary = f"{r.status_code} {(r.text or '')[:120].strip()}"
-            attempts.append(
-                f"{path} [{'query' if q else 'body'}] -> {summary}"
-            )
-        if not silent:
-            log.warning(
-                "mastership %s: no probe accepted\n  %s",
-                action, "\n  ".join(attempts),
-            )
-        return False
+        r = self.post(f"/rw/mastership/edit/{action}", silent=silent)
+        return bool(r is not None and r.ok)
 
 
 # ---- module helpers --------------------------------------------------------

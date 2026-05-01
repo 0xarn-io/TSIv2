@@ -79,32 +79,38 @@ def test_read_rapid_failure_returns_none():
 
 # ---- write_rapid ------------------------------------------------------------
 
+def _classify(url: str) -> str:
+    """Map a POST url to a short label for write_rapid test assertions."""
+    if "/rw/rapid/symbol/" in url:
+        return "write"
+    if url.endswith("/rw/mastership/edit/request"):
+        return "request"
+    if url.endswith("/rw/mastership/edit/release"):
+        return "release"
+    return f"unknown:{url}"
+
+
 def test_write_rapid_succeeds_without_mastership_when_direct_write_ok():
     """OmniCore in AUTO mode usually allows the write directly — no master."""
-    calls: list[tuple[str, str | None]] = []
+    calls: list[str] = []
     def post(url, params=None, data=None, headers=None, timeout=None):
-        action = (params or {}).get("action") or (data or {}).get("action")
-        calls.append((url, action))
+        calls.append(_classify(url))
         return _ok()
     c, _ = _client_with_mock_session(post=post)
 
     assert c.write_rapid("T_ROB1", "MainModule", "n", "42") is True
-    # Single POST: data path. No mastership round-trip.
-    assert calls == [
-        ("https://1.2.3.4/rw/rapid/symbol/RAPID/T_ROB1/MainModule/n/data", None),
-    ]
+    assert calls == ["write"]   # single POST, no mastership round-trip
 
 
 def test_write_rapid_falls_back_to_mastership_when_direct_fails():
     """Direct write fails → acquire mastership, retry, release."""
     posts: list[str] = []
     def post(url, params=None, data=None, headers=None, timeout=None):
-        action = (params or {}).get("action") or (data or {}).get("action")
-        if "/rw/rapid/symbol/" in url:
-            posts.append("write")
+        kind = _classify(url)
+        posts.append(kind)
+        if kind == "write":
             # First write fails (no mastership), second succeeds.
             return _ok(status=500, ok=False) if posts.count("write") == 1 else _ok()
-        posts.append(action)
         return _ok()
     c, _ = _client_with_mock_session(post=post)
 
@@ -116,12 +122,9 @@ def test_write_rapid_releases_mastership_even_when_retry_fails():
     """Direct + retried write both fail → mastership must still be released."""
     posts: list[str] = []
     def post(url, params=None, data=None, headers=None, timeout=None):
-        action = (params or {}).get("action") or (data or {}).get("action")
-        if "/rw/rapid/symbol/" in url:
-            posts.append("write")
-            return _ok(status=500, ok=False)
-        posts.append(action)
-        return _ok()
+        kind = _classify(url)
+        posts.append(kind)
+        return _ok(status=500, ok=False) if kind == "write" else _ok()
     c, _ = _client_with_mock_session(post=post)
 
     assert c.write_rapid("T_ROB1", "Mod", "n", "1") is False
@@ -129,21 +132,18 @@ def test_write_rapid_releases_mastership_even_when_retry_fails():
 
 
 def test_write_rapid_returns_false_when_direct_and_mastership_unavailable():
-    """Direct write fails AND no mastership URI shape works → return False."""
+    """Direct write fails AND mastership endpoint 404 → return False, no retry."""
     posts: list[str] = []
     def post(url, params=None, data=None, headers=None, timeout=None):
-        action = (params or {}).get("action") or (data or {}).get("action")
-        if "/rw/rapid/symbol/" in url:
-            posts.append("write")
+        kind = _classify(url)
+        posts.append(kind)
+        if kind == "write":
             return _ok(status=500, ok=False)
-        # All mastership probes 404.
-        posts.append(action)
-        return _ok(status=404, ok=False)
+        return _ok(status=404, ok=False)   # mastership not available
     c, _ = _client_with_mock_session(post=post)
 
     assert c.write_rapid("T_ROB1", "Mod", "n", "1") is False
-    # Exactly one write attempt; mastership probed (4 shapes) and never released.
-    assert posts.count("write") == 1
+    assert posts.count("write") == 1   # no retry once mastership fails
     assert "release" not in posts
 
 

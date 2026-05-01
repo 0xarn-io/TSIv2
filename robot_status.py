@@ -137,9 +137,31 @@ class RobotMonitor:
         limit: int = 50,
         include_info: bool = False,
     ) -> list[dict]:
-        """One-shot event-log pull. Returns a list of dicts (warnings + errors)."""
-        obj = self._get(f"/rw/elog/{domain}", params={"lang": "en", "lim": limit})
-        if not obj:
+        """One-shot event-log pull. Returns a list of dicts (warnings + errors).
+
+        Some controllers occasionally emit malformed JSON for elog
+        batches — typically caused by unescaped chars in the localized
+        message strings. Try a few progressively safer fetches before
+        giving up: full batch with lang=en, smaller batch, then raw
+        (no lang) which skips the translation layer entirely.
+        """
+        path = f"/rw/elog/{domain}"
+        smaller = max(4, limit // 4)
+        attempts = [
+            {"lang": "en", "lim": limit},
+            {"lang": "en", "lim": smaller},
+            {"lim": limit},          # raw — bypass localized strings
+            {"lim": smaller},
+        ]
+        obj = None
+        for params in attempts:
+            obj = self._get(path, params=params, silent=True)
+            if obj is not None:
+                break
+        if obj is None:
+            log.warning(
+                "RWS GET %s failed (all variants): malformed response", path,
+            )
             return []
         items = obj.get("_embedded", {}).get("resources", [])
         TYPES = {"1": "INFO", "2": "WARN", "3": "ERROR"}
