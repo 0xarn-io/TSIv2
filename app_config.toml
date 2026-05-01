@@ -39,6 +39,8 @@ alias  = "camera.snap_exit"
 camera = "exit"
 
 [scanner]
+# enabled      = false      # set to skip the SICK pipeline entirely on a
+                             # dev laptop where pysickudt isn't installed
 udp_port_a     = 2111
 udp_port_b     = 2112
 separation_m   = 2.45

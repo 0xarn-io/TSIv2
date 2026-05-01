@@ -61,8 +61,6 @@ from robot_master     import RobotMasterMonitor
 from robot_publisher  import RobotPublisher
 from robot_status     import RobotMonitor
 from robot_variables  import RobotVariablesMonitor
-from sick_bridge      import SickBridge
-from sick_publisher   import SickPublisher
 from snapshot_archive import SnapshotArchive
 from twincat_comm     import TwinCATComm
 
@@ -79,9 +77,24 @@ cfg = AppConfig.load(Path(__file__).with_name("app_config.toml"))
 # hooks below (loop ref needed for "async" subscribers).
 bus       = EventBus()
 
-bridge    = SickBridge.from_config(cfg.scanner, bus=bus)
 plc       = TwinCATComm.from_toml(cfg.plc.vars_file, bus=bus)
-publisher = SickPublisher(bridge, plc, cfg.plc.publisher, bus=bus)
+
+# SICK pipeline is opt-out via [scanner] enabled = false in app_config.toml,
+# which lets the rest of the system run on dev laptops without pysickudt
+# installed. The imports are gated too — sick_bridge transitively imports
+# pysickudt at module scope, so we can't unconditionally pull it in here.
+if cfg.scanner.enabled:
+    from sick_bridge    import SickBridge
+    from sick_publisher import SickPublisher
+    bridge    = SickBridge.from_config(cfg.scanner, bus=bus)
+    publisher = SickPublisher(bridge, plc, cfg.plc.publisher, bus=bus)
+else:
+    bridge = None
+    publisher = None
+    logging.getLogger(__name__).info(
+        "scanner disabled in config — SICK pipeline skipped",
+    )
+
 archive   = SnapshotArchive.from_config(cfg.snapshots) if cfg.snapshots else None
 cameras   = CameraManager.from_config(cfg.cameras, archive=archive)
 cam_pub   = CameraPublisher(cameras, plc, cfg.plc.camera_triggers, bus=bus)
@@ -156,8 +169,8 @@ def _startup() -> None:
     bus.start(loop)                         # before any producer publishes
     plc.open()
     if archive:    archive.start()        # one-shot prune
-    bridge.start()
-    publisher.start()
+    if bridge:     bridge.start()
+    if publisher:  publisher.start()
     cam_pub.start()
     if heartbeat:  heartbeat.start()
     if robot:      robot.start()
@@ -178,8 +191,8 @@ def _shutdown() -> None:
     if robot:      robot.stop()
     if heartbeat:  heartbeat.stop()
     cam_pub.stop()
-    publisher.stop()
-    bridge.stop()
+    if publisher:  publisher.stop()
+    if bridge:     bridge.stop()
     if archive:    archive.stop()
     plc.close()
     bus.stop()                              # after every producer is silent

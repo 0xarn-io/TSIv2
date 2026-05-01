@@ -44,6 +44,38 @@ def test_scanner_settings(app_toml: Path):
     assert cfg.scanner.udp_port_a == 2111
     assert cfg.scanner.udp_port_b == 2112
     assert cfg.scanner.separation_m == 2.45
+    # Default: enabled when not specified, so existing configs keep working.
+    assert cfg.scanner.enabled is True
+
+
+def test_scanner_can_be_disabled(tmp_path: Path, signals_toml: Path):
+    """[scanner] enabled = false skips the SICK pipeline (laptop / dev)."""
+    p = tmp_path / "no_sick.toml"
+    p.write_text(f"""
+[plc]
+vars_file = "{signals_toml.name}"
+[plc.publisher]
+event_alias = "sick.event"
+live_alias = "sick.live"
+enable_alias = "sick.enable"
+[scanner]
+enabled = false
+udp_port_a = 2111
+udp_port_b = 2112
+separation_m = 2.45
+belt_speed_mps = 0.254
+belt_y = -1.48
+[ui]
+refresh_hz = 10.0
+host = "0.0.0.0"
+port = 8080
+title = "Test"
+[[cameras]]
+name = "x"
+url = "rtsp://x"
+""")
+    cfg = AppConfig.load(p)
+    assert cfg.scanner.enabled is False
 
 
 def test_cameras_list(app_toml: Path):

@@ -44,6 +44,9 @@ class ScannerSettings:
     separation_m:   float
     belt_speed_mps: float
     belt_y:         float
+    enabled:        bool = True   # set false to skip the SICK pipeline
+                                  # entirely (laptop / dev without
+                                  # pysickudt installed)
 
 
 @dataclass(frozen=True)
