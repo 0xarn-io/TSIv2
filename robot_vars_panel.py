@@ -112,9 +112,21 @@ class RobotVarsPanel:
     # ---- runtime ------------------------------------------------------------
 
     def _refresh(self) -> None:
-        for alias, label in self._value_labels.items():
-            v = self.monitor.get(alias)
-            label.text = "…" if v is None else _format_value(v)
+        for alias, label in list(self._value_labels.items()):
+            try:
+                v = self.monitor.get(alias)
+                label.text = "…" if v is None else _format_value(v)
+            except RuntimeError:
+                # Label belongs to a deleted client (singleton panel
+                # held stale refs after navigation). Drop our refs and
+                # cancel the timer; the next mount rebuilds them.
+                self._value_labels.clear()
+                self._editors.clear()
+                if self._timer is not None:
+                    try: self._timer.delete()
+                    except Exception: pass
+                    self._timer = None
+                return
 
     def _submit(self, cfg: RobotVariableConfig) -> None:
         editor = self._editors.get(cfg.alias)
