@@ -30,6 +30,80 @@ def _short(v: Any) -> str:
     return repr(v)
 
 
+def _field_resolves(ftype: str, built: dict) -> bool:
+    """A struct field's type is resolvable when it's a primitive or already-built struct."""
+    return ftype.upper() in PRIMITIVE_TYPES or ftype in built
+
+
+def _resolve_field(
+    sname: str, fname: str, ftype: str, built: dict,
+) -> tuple[str, type]:
+    """Return (canonical_type_string, ctypes_class) for a struct field.
+
+    Primitives are uppercased so the ftype string is canonical; struct
+    names stay as-is (case-sensitive lookup).
+    """
+    ftype_u = ftype.upper()
+    if ftype_u in PRIMITIVE_TYPES:
+        return ftype_u, PRIMITIVE_TYPES[ftype_u][1]
+    if ftype in built:
+        return ftype, built[ftype].ctypes_class
+    raise ValueError(
+        f"Struct '{sname}.{fname}': type '{ftype}' is neither a primitive "
+        f"nor a known struct"
+    )
+
+
+def _unpack_struct(raw: Any) -> dict:
+    """Recursively dict-ify a ctypes.Structure value.
+
+    Nested struct fields become nested dicts; primitives pass through.
+    Used by TwinCATComm._unpack to produce caller-friendly read shapes.
+    """
+    out: dict = {}
+    for fname, _ in raw._fields_:
+        val = getattr(raw, fname)
+        if isinstance(val, ctypes.Structure):
+            out[fname] = _unpack_struct(val)
+        else:
+            out[fname] = val
+    return out
+
+
+def _populate_struct(
+    target: Any, value: dict, struct_def: "StructDef", all_structs: dict,
+) -> None:
+    """Apply value dict's entries into target ctypes.Structure.
+
+    For nested struct fields where the value is a dict, recurse into the
+    existing nested struct (modifying it in place — getattr on a struct
+    field returns a reference that shares memory with the parent). For
+    primitives, plain setattr.
+    """
+    for fname, fval in value.items():
+        ftype = struct_def.fields[fname]
+        if ftype in all_structs:
+            nested_def = all_structs[ftype]
+            if isinstance(fval, dict):
+                unknown = set(fval) - set(nested_def.fields)
+                if unknown:
+                    raise KeyError(
+                        f"Unknown fields for {ftype}: {unknown}. "
+                        f"Valid: {sorted(nested_def.fields)}"
+                    )
+                nested = getattr(target, fname)
+                _populate_struct(nested, fval, nested_def, all_structs)
+            elif isinstance(fval, nested_def.ctypes_class):
+                setattr(target, fname, fval)
+            else:
+                raise TypeError(
+                    f"Field '{fname}' (type {ftype}) requires a dict or "
+                    f"{nested_def.ctypes_class.__name__}, got {type(fval).__name__}"
+                )
+        else:
+            setattr(target, fname, fval)
+
+
 # IEC primitive type → (pyads PLCTYPE_*, ctypes type for struct packing)
 PRIMITIVE_TYPES: dict[str, tuple[int, type]] = {
     "BOOL":  (pyads.PLCTYPE_BOOL,  ctypes.c_bool),
@@ -104,32 +178,63 @@ class TwinCATConfig:
 
     @staticmethod
     def _build_structs(specs: dict[str, dict[str, str]]) -> dict[str, StructDef]:
+        """Build ctypes.Structure classes from the TOML [structs.*] section.
+
+        Supports nested struct fields: a field's type may be either a
+        primitive (BOOL, DINT, REAL, ...) or the name of another struct
+        defined in the same TOML. Iterates in rounds; each round builds
+        any struct whose field types are all resolved (primitives or
+        already-built structs). Stops when no progress is made. This
+        accepts any TOML ordering — the user can define ST_BeltUnitData
+        before ST_TopsheetData and it still resolves.
+        """
         out: dict[str, StructDef] = {}
-        for sname, sfields in specs.items():
-            if not sfields:
-                raise ValueError(f"Struct '{sname}' has no fields")
+        pending: dict[str, dict[str, str]] = dict(specs)
 
-            ctypes_fields = []
-            ordered = OrderedDict()
-            for fname, ftype in sfields.items():
-                ftype_u = ftype.upper()
-                if ftype_u not in PRIMITIVE_TYPES:
-                    raise ValueError(
-                        f"Struct '{sname}.{fname}': type '{ftype}' is not a "
-                        f"primitive. Nested structs not yet supported."
-                    )
-                ordered[fname] = ftype_u
-                ctypes_fields.append((fname, PRIMITIVE_TYPES[ftype_u][1]))
+        max_rounds = len(pending) + 1
+        for _round in range(max_rounds):
+            if not pending:
+                break
+            built_this_round = False
+            for sname in list(pending):
+                sfields = pending[sname]
+                if not sfields:
+                    raise ValueError(f"Struct '{sname}' has no fields")
+                if not all(_field_resolves(ft, out) for ft in sfields.values()):
+                    continue                          # deps not ready yet
 
-            # TwinCAT 3 default pack_mode is 8. If a struct in the PLC has
-            # {attribute 'pack_mode' := '1'} (or 2/4), set _pack_ accordingly
-            # — easiest is to add a TOML option later if you actually use it.
-            cls_ = type(
-                sname,
-                (ctypes.Structure,),
-                {"_pack_": 8, "_fields_": ctypes_fields},
-            )
-            out[sname] = StructDef(name=sname, fields=ordered, ctypes_class=cls_)
+                ctypes_fields = []
+                ordered: "OrderedDict[str, str]" = OrderedDict()
+                for fname, ftype in sfields.items():
+                    ftype_norm, ctype = _resolve_field(sname, fname, ftype, out)
+                    ordered[fname] = ftype_norm
+                    ctypes_fields.append((fname, ctype))
+
+                # TwinCAT 3 default pack_mode is 8. If a struct in the PLC has
+                # {attribute 'pack_mode' := '1'} (or 2/4), set _pack_ accordingly
+                # — easiest is to add a TOML option later if you actually use it.
+                cls_ = type(
+                    sname,
+                    (ctypes.Structure,),
+                    {"_pack_": 8, "_fields_": ctypes_fields},
+                )
+                out[sname] = StructDef(name=sname, fields=ordered, ctypes_class=cls_)
+                del pending[sname]
+                built_this_round = True
+
+            if not built_this_round:
+                unresolved = []
+                for sname, sfields in pending.items():
+                    bad = [
+                        f"{fname}={ftype}" for fname, ftype in sfields.items()
+                        if not _field_resolves(ftype, out)
+                    ]
+                    unresolved.append(f"{sname}({', '.join(bad)})")
+                raise ValueError(
+                    f"Struct(s) reference unknown types: {'; '.join(unresolved)}. "
+                    f"Defined structs: {sorted(out)}, "
+                    f"primitives: {sorted(PRIMITIVE_TYPES)}"
+                )
         return out
 
     @staticmethod
@@ -256,7 +361,7 @@ class TwinCATComm:
     def _unpack(self, v: VarDef, raw: Any) -> Any:
         if not v.is_struct:
             return raw
-        return {f: getattr(raw, f) for f, _ in raw._fields_}
+        return _unpack_struct(raw)
 
     def _pack_struct(self, v: VarDef, value: Any) -> Any:
         cls_ = v.plc_type
@@ -276,15 +381,20 @@ class TwinCATComm:
                 f"Valid: {sorted(known)}"
             )
 
-        # Partial dict → read-modify-write so untouched fields aren't zeroed.
-        # Costs one extra ADS round-trip per partial write.
-        if set(value.keys()) != known:
+        # Read-modify-write whenever the write isn't a guaranteed full overwrite:
+        #   * top-level dict missing fields, OR
+        #   * any value is a (possibly partial) nested dict
+        # Costs one extra ADS round-trip per such write.
+        needs_rmw = (
+            set(value.keys()) != known
+            or any(isinstance(fv, dict) for fv in value.values())
+        )
+        if needs_rmw:
             current = self._conn.read_by_name(v.symbol, cls_)
         else:
             current = cls_()
 
-        for fname, fval in value.items():
-            setattr(current, fname, fval)
+        _populate_struct(current, value, struct_def, self.config.structs)
         return current
 
     # ---- notifications --------------------------------------------------
