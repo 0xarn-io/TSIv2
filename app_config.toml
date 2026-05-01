@@ -39,7 +39,7 @@ alias  = "camera.snap_exit"
 camera = "exit"
 
 [scanner]
-enabled      = false      # set to skip the SICK pipeline entirely on a
+# enabled      = false      # set to skip the SICK pipeline entirely on a
                              # dev laptop where pysickudt isn't installed
 udp_port_a     = 2111
 udp_port_b     = 2112
@@ -50,7 +50,7 @@ belt_y         = -1.48
 [ui]
 refresh_hz = 10.0          # live-label update rate
 host       = "0.0.0.0"
-port       = 8123
+port       = 8080
 title      = "Warak TSI"
 
 [[cameras]]
