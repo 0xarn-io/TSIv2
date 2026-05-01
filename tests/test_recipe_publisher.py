@@ -77,8 +77,11 @@ def test_bus_mode_skips_internal_queue_and_subscribes_via_bus():
         pub = RecipePublisher(recipes, plc, cfg, bus=bus)
         pub.start()
         try:
-            # No legacy plumbing in bus mode.
-            plc.subscribe.assert_not_called()
+            # Bus mode skips the legacy queue+worker but MUST still
+            # register the underlying ADS device notification — otherwise
+            # bus subscribers never see code changes from the operator.
+            plc.ensure_published.assert_called_once()
+            assert plc.ensure_published.call_args.args == ("recipe.code",)
             assert pub._worker is None
             # Drive a code change through the bus.
             bus.publish(signals.plc_signal_changed,

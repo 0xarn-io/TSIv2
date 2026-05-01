@@ -182,6 +182,9 @@ class TwinCATComm:
         self._conn = pyads.Connection(config.net_id, config.port)
         # alias -> (notif_handle, user_handle)
         self._notifications: dict[str, tuple[int, int]] = {}
+        # ensure_published()-only aliases: one shared notification per alias,
+        # owned by TwinCATComm, torn down in close().
+        self._published_aliases: dict[str, tuple[int, int]] = {}
 
     @classmethod
     def from_toml(cls, path: str | Path, *, bus=None) -> "TwinCATComm":
@@ -331,6 +334,40 @@ class TwinCATComm:
 
         handles = self._conn.add_device_notification(v.symbol, attr, _cb)
         self._notifications[alias] = handles
+        return handles
+
+    def ensure_published(
+        self,
+        alias: str,
+        *,
+        cycle_time_ms: int = 100,
+        max_delay_ms: int = 100,
+        on_change: bool = True,
+    ) -> tuple[int, int]:
+        """Register an ADS device notification with a no-op callback so
+        bus subscribers actually receive PlcSignalChanged for this alias.
+
+        Bus-mode subscribers listen on `signals.plc_signal_changed` and
+        filter by alias. But the bus only fires when the inner pyads
+        notification callback runs, which only happens after an ADS
+        notification has been registered. Use this helper when a module
+        wants the bus event but no direct Python callback.
+
+        Idempotent per alias: multiple subscribers can call this for the
+        same alias and only one underlying ADS notification is created.
+        Cleanup happens in `close()` along with every other notification.
+        """
+        existing = self._published_aliases.get(alias)
+        if existing is not None:
+            return existing
+        handles = self.subscribe(
+            alias,
+            lambda _alias, _value: None,
+            cycle_time_ms=cycle_time_ms,
+            max_delay_ms=max_delay_ms,
+            on_change=on_change,
+        )
+        self._published_aliases[alias] = handles
         return handles
 
     def unsubscribe(self, handles: tuple[int, int]) -> None:

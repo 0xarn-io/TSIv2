@@ -121,10 +121,11 @@ class RecipeSetpointsPushed:
 
 @dataclass(frozen=True)
 class SizesChanged:
-    """A row in the sizes store was inserted, updated, or cleared.
+    """A row in the sizes store was inserted, updated, or deleted.
 
-    `op` is one of 'upsert' | 'clear' | 'reload'. `payload` is the row
-    (or None for clear)."""
+    `op` matches `sizes_store.SizesChange.op`: one of
+    'add' | 'update' | 'delete'. `payload` is the row dict for
+    add/update and None for delete."""
     slot:    int
     op:      str
     payload: Mapping[str, Any] | None

@@ -217,7 +217,13 @@ def test_bus_mode_subscribes_via_bus_not_plc():
         pub = CameraPublisher(cameras, plc, triggers, bus=bus)
         pub.start()
         try:
-            plc.subscribe.assert_not_called()
+            # Bus mode must still register the underlying ADS device
+            # notification — otherwise the bus never emits and the
+            # subscription below would silently never deliver in
+            # production. One ensure_published per trigger alias.
+            assert plc.ensure_published.call_count == 2
+            called_aliases = [c.args[0] for c in plc.ensure_published.call_args_list]
+            assert sorted(called_aliases) == [t.alias for t in triggers]
 
             # Rising edge on entry → cameras.snap("entry", ...)
             bus.publish(signals.plc_signal_changed,

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ctypes
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -233,3 +234,131 @@ def test_primitive_types_complete():
     for name, (plc_const, ctype) in PRIMITIVE_TYPES.items():
         assert plc_const is not None, name
         assert ctypes.sizeof(ctype) > 0, name
+
+
+# ---- bus integration: subscribe → bus.publish round-trip --------------------
+
+class _FakeAdsConn:
+    """Stand-in for pyads.Connection that captures registered notification
+    callbacks so tests can fire them and exercise the bus round-trip."""
+
+    def __init__(self):
+        self.callbacks: dict[str, callable] = {}     # symbol -> _cb
+        self._next_handle = 1
+
+    def notification(self, _plc_type):
+        # Real pyads decorator wraps the cb to unmarshal C types; for the
+        # test we want the raw cb so we can hand it ready-unpacked values.
+        return lambda cb: cb
+
+    def add_device_notification(self, symbol, _attr, cb):
+        self.callbacks[symbol] = cb
+        h = (self._next_handle, self._next_handle + 1)
+        self._next_handle += 2
+        return h
+
+    def del_device_notification(self, *_a):
+        pass
+
+    def fire(self, symbol, value):
+        """Simulate an ADS notification firing for `symbol`."""
+        self.callbacks[symbol](handle=0, name=symbol, timestamp=0, value=value)
+
+
+def test_ensure_published_registers_notification_and_bus_emits(signals_toml):
+    """Integration: ensure_published() registers an ADS notification, and
+    when that notification fires (via the captured cb), PlcSignalChanged
+    is published on the bus with the right alias + value.
+
+    This catches the exact bug fixed in this PR: bus subscribers that
+    call only bus.subscribe() and never plc.ensure_published() will
+    silently never receive anything in production."""
+    import asyncio
+    from event_bus import EventBus
+    from events import signals as bus_signals
+
+    bus = EventBus()
+    loop = asyncio.new_event_loop()
+    bus.start(loop)
+    try:
+        comm = TwinCATComm.from_toml(signals_toml, bus=bus)
+        comm._conn = _FakeAdsConn()
+
+        received: list = []
+        bus.subscribe(bus_signals.plc_signal_changed,
+                      lambda p: received.append(p), mode="sync")
+
+        # No notification yet → bus emits nothing even when fired.
+        # (alias 'recipe.code' resolves to 'GVL.nRecipeCode' per signals_toml.)
+        assert "GVL.nRecipeCode" not in comm._conn.callbacks
+
+        # Register via ensure_published; check the underlying pyads
+        # notification got created.
+        comm.ensure_published("recipe.code")
+        assert "GVL.nRecipeCode" in comm._conn.callbacks
+
+        # Fire a value change and verify the bus subscriber receives it.
+        comm._conn.fire("GVL.nRecipeCode", 42)
+        assert len(received) == 1
+        assert received[0].alias == "recipe.code"
+        assert received[0].value == 42
+
+        # Idempotent per alias: two ensure_published calls = one cb.
+        before = comm._conn.callbacks["GVL.nRecipeCode"]
+        comm.ensure_published("recipe.code")
+        assert comm._conn.callbacks["GVL.nRecipeCode"] is before
+    finally:
+        bus.stop()
+        loop.close()
+
+
+def test_recipe_publisher_bus_round_trip(signals_toml, tmp_path):
+    """End-to-end: real TwinCATComm + fake ADS conn + real RecipePublisher
+    on the bus. Operator changes recipe.code on PLC → fake notification
+    fires → bus emits → recipe_publisher writes setpoints. This is the
+    full path that v1 of the bus migration silently broke."""
+    import asyncio
+    from event_bus import EventBus
+    from recipe_publisher import RecipePublisher, RecipePublisherConfig
+    from recipes_store import Recipe
+
+    bus = EventBus()
+    loop = asyncio.new_event_loop()
+    bus.start(loop)
+    try:
+        comm = TwinCATComm.from_toml(signals_toml, bus=bus)
+        comm._conn = _FakeAdsConn()
+        # Bypass the real pyads write path so we can observe what was written.
+        writes = []
+        comm.write = lambda alias, val: writes.append((alias, val))
+        # Bootstrap reads `recipe.code`; route it through the fake.
+        comm.read = lambda alias: 0 if alias == "recipe.code" else None
+
+        recipes = MagicMock()
+        recipes.get.return_value = Recipe(code=7, x_topsheet_length=999)
+
+        pub = RecipePublisher(recipes, comm, RecipePublisherConfig(
+            code_alias="recipe.code", setpoints_alias="recipe.setpoints",
+        ), bus=bus)
+        pub.start()
+        try:
+            # Notification was registered against the real symbol.
+            assert "GVL.nRecipeCode" in comm._conn.callbacks
+
+            # Operator changes the code on the PLC.
+            comm._conn.fire("GVL.nRecipeCode", 7)
+
+            # Bus dispatch is mode='thread'; wait for the write.
+            import time
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and not writes:
+                time.sleep(0.01)
+            assert len(writes) >= 1
+            alias, struct = writes[-1]
+            assert alias == "recipe.setpoints"
+            assert struct["nXTopsheetLength"] == 999
+        finally:
+            pub.stop()
+    finally:
+        bus.stop()
+        loop.close()

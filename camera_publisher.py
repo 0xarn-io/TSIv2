@@ -78,7 +78,14 @@ class CameraPublisher:
                 self._bus.subscribe(signals.plc_signal_changed,
                                     _on_plc, mode="thread"),
             ))
+            # The bus only fires when an ADS device notification fires,
+            # which requires plc.subscribe() to have registered one. The
+            # bus subscription above filters by alias; this loop ensures
+            # the underlying notifications actually exist. Cleanup is
+            # handled by plc.close() — no per-handle tracking here.
             for t in self.triggers:
+                self.plc.ensure_published(t.alias)
+
                 panel = self.cameras.panels[t.camera]
                 unsub = panel.on_snapshot_done(
                     lambda _name, _source, _ok, _path, alias=t.alias: self._ack(alias)

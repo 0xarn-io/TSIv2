@@ -264,6 +264,9 @@ def test_bus_path_writes_row_and_uses_cached_recipe_code(tmp_path: Path):
                        recipe_alias="recipe.code", bus=bus)
         u.start()
         try:
+            # Without ensure_published the bus never emits for the recipe
+            # alias and the cache stays stale forever.
+            plc.ensure_published.assert_called_once_with("recipe.code")
             # Recipe code update arrives via the bus.
             bus.publish(signals.plc_signal_changed,
                         PlcSignalChanged(alias="recipe.code",

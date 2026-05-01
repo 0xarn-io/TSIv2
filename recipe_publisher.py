@@ -100,6 +100,21 @@ class RecipePublisher:
             self._bus_unsub = lambda: self._bus.unsubscribe(
                 signals.plc_signal_changed, wrapper,
             )
+            # Register the ADS device notification so PlcSignalChanged
+            # actually fires on the bus when the operator changes the
+            # code on the PLC. Without this, the bus subscription above
+            # would silently never deliver anything in production. Idempotent
+            # per alias and torn down by plc.close().
+            try:
+                self.plc.ensure_published(
+                    self.cfg.code_alias, cycle_time_ms=self.cfg.cycle_ms,
+                )
+            except Exception as e:
+                log.warning(
+                    "recipe code subscription failed (%s); recipe publisher "
+                    "disabled until '%s' is available on the PLC",
+                    e, self.cfg.code_alias,
+                )
             # Bootstrap once so the PLC isn't stale at boot. Runs on this
             # (startup) thread, not the receiver thread — safe to block.
             try:

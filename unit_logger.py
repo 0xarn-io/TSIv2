@@ -180,6 +180,15 @@ class UnitLogger:
                                         self._on_plc_signal,
                                         mode="thread"),
                 ))
+                # Without an ADS notification the bus never fires for
+                # this alias. Idempotent per alias — recipe_publisher
+                # may also call this and only one notification is
+                # created. Cleanup is handled by plc.close().
+                try:
+                    self.plc.ensure_published(self.recipe_alias)
+                except Exception as e:
+                    log.debug("unit_logger: ensure_published(%s) failed: %s",
+                              self.recipe_alias, e)
                 # Bootstrap the cache so the first unit event after start
                 # already has a recipe code (if the PLC is reachable).
                 try:
