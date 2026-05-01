@@ -50,7 +50,7 @@ belt_y         = -1.48
 [ui]
 refresh_hz = 10.0          # live-label update rate
 host       = "0.0.0.0"
-port       = 8080
+port       = 8123
 title      = "Warak TSI"
 
 [[cameras]]
