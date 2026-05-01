@@ -120,3 +120,7 @@ keep_days = 90
 db_path       = "data/robot_status_log.db"
 keep_days     = 90
 tick_period_s = 30.0
+# Optional: if set, the store subscribes to plc_signal_changed for this
+# alias (declared in plc_signals.toml) and stamps every row with the
+# latest bypass value. Comment out to disable bypass tracking.
+bypass_alias  = "robot.bypass"
