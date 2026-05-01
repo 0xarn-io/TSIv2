@@ -245,3 +245,104 @@ def test_stop_joins_worker():
     assert pub._worker is not None
     pub.stop()
     assert pub._worker is None
+
+
+# ---- bus-mode integration ----
+# Real EventBus + FakeTwinCATComm + real RecipePublisher. Catches the
+# refactor-branch bug class: forgetting to register the ADS notification
+# in bus mode means simulate_change fires nobody, the queue stays empty,
+# and the recipe write never runs.
+
+import asyncio
+import threading
+from event_bus import EventBus
+from tests.fakes import FakeTwinCATComm
+
+
+def _bus_loop():
+    loop = asyncio.new_event_loop()
+    started = threading.Event()
+    def _run():
+        asyncio.set_event_loop(loop)
+        loop.call_soon(started.set)
+        loop.run_forever()
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    started.wait(timeout=1.0)
+    return loop, t
+
+
+def _stop_bus_loop(bus, loop, t):
+    bus.stop()
+    loop.call_soon_threadsafe(loop.stop)
+    t.join(timeout=2.0)
+    loop.close()
+
+
+def _make_bus_pub(initial_code: int = 0):
+    bus = EventBus()
+    loop, t = _bus_loop()
+    bus.start(loop)
+    plc = FakeTwinCATComm(bus=bus)
+    # FakeTwinCATComm.read returns None; we'll use a simple subclass behaviour
+    # via direct attribute override for the initial-code seeding.
+    plc.read = lambda alias: initial_code            # type: ignore[assignment]
+    recipes = MagicMock()
+    cfg = RecipePublisherConfig(
+        code_alias="recipe.code",
+        setpoints_alias="recipe.setpoints",
+    )
+    pub = RecipePublisher(recipes, plc, cfg, bus=bus)
+    return pub, recipes, plc, bus, loop, t
+
+
+def test_bus_mode_registers_ads_notification_for_code_alias():
+    """Regression for the bus-migration bug: bus mode must call
+    ensure_published so the underlying ADS notification fires."""
+    pub, recipes, plc, bus, loop, t = _make_bus_pub(initial_code=0)
+    try:
+        pub.start()
+        assert "recipe.code" in plc.aliases_with_notifications()
+    finally:
+        pub.stop()
+        _stop_bus_loop(bus, loop, t)
+
+
+def test_bus_mode_round_trip_writes_setpoints_on_code_change():
+    """simulate_change(code_alias, 7) → bus → queue → worker → plc.write setpoints."""
+    pub, recipes, plc, bus, loop, t = _make_bus_pub(initial_code=0)
+    recipes.get.return_value = _recipe(code=7)
+    try:
+        pub.start()
+        plc.simulate_change("recipe.code", 7)
+        # bus dispatch (thread-mode) → enqueue → worker writes setpoints.
+        for _ in range(50):
+            if any(c[0] == "recipe.setpoints" for c in plc.write_calls):
+                break
+            time.sleep(0.02)
+        setpoint_writes = [c for c in plc.write_calls
+                           if c[0] == "recipe.setpoints"]
+        assert setpoint_writes, "expected a setpoints write after code change"
+    finally:
+        pub.stop()
+        _stop_bus_loop(bus, loop, t)
+
+
+def test_bus_mode_unrelated_alias_does_not_enqueue():
+    """The bus broadcasts every PlcSignalChanged; the subscriber must filter."""
+    pub, recipes, plc, bus, loop, t = _make_bus_pub(initial_code=0)
+    try:
+        pub.start()
+        # Drain the initial-code seed enqueue (initial_code=0 → _apply skips,
+        # no write — but the queue was used).
+        _drain(pub)
+        plc.write_calls.clear()
+        # Fire a change on a different alias.
+        from events import PlcSignalChanged, signals
+        bus.publish(signals.plc_signal_changed,
+                    PlcSignalChanged(alias="sick.event", value=99, ts=0.0))
+        time.sleep(0.05)
+        assert not any(c[0] == "recipe.setpoints" for c in plc.write_calls)
+    finally:
+        pub.stop()
+        _stop_bus_loop(bus, loop, t)

@@ -22,8 +22,9 @@ def test_build_with_all_stores_populates_all_panels() -> None:
     assert d.sizes      is not None
     assert d.errors     is not None
     available = [t.name for t in d._available_tabs()]
+    # "errors" tab spec is temporarily commented out in dashboard.py.
     assert available == [
-        "cameras", "robot", "vars", "recipes", "sizes", "errors",
+        "cameras", "robot", "vars", "recipes", "sizes",
     ]
 
 

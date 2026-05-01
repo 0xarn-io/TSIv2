@@ -48,10 +48,13 @@ class RobotPublisher:
         monitor: RobotMonitor,
         plc: TwinCATComm,
         cfg: RobotStatusConfig,
+        *,
+        bus=None,
     ):
         self.monitor = monitor
         self.plc = plc
         self.cfg = cfg
+        self._bus = bus
         self._unsub: Callable[[], None] | None = None
 
     def start(self) -> None:

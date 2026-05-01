@@ -84,9 +84,11 @@ class Size:
 
 @dataclass(frozen=True)
 class SizesChange:
-    op:    Literal["add", "update", "delete"]
-    size:  Size | None                          # None on delete
-    sid:   int                                  # row id (post-insert / pre-delete)
+    op:     Literal["add", "update", "delete"]
+    size:   Size | None                         # None on delete
+    sid:    int                                 # row id (post-insert / pre-delete)
+    origin: str = "user"                        # who triggered the change
+    # ('user' from the panel; 'robot_master' from inbound robot mirror)
 
 
 def _row_to_size(row: sqlite3.Row) -> Size:
@@ -103,16 +105,17 @@ def _row_to_size(row: sqlite3.Row) -> Size:
 class SizesStore:
     """SQLite-backed size catalog. Thread-safe via lock."""
 
-    def __init__(self, cfg: SizesConfig):
+    def __init__(self, cfg: SizesConfig, *, bus=None):
         self.cfg = cfg
+        self._bus = bus
         self._conn: sqlite3.Connection | None = None
         self._lock = threading.Lock()
         self._cbs: list[Callable[[SizesChange], None]] = []
         self._silent = False
 
     @classmethod
-    def from_config(cls, cfg: SizesConfig) -> "SizesStore":
-        return cls(cfg)
+    def from_config(cls, cfg: SizesConfig, *, bus=None) -> "SizesStore":
+        return cls(cfg, bus=bus)
 
     # ---- lifecycle ----------------------------------------------------------
 
@@ -148,6 +151,20 @@ class SizesStore:
             try: cb(ev)
             except Exception as e:
                 log.warning("sizes on_change cb failed: %s", e)
+        if self._bus is not None:
+            from events import SizesChanged, signals
+            slot = (ev.size.slot if (ev.size is not None
+                                     and ev.size.slot is not None) else -1)
+            payload = (None if ev.size is None
+                       else {"id": ev.size.id, "slot": ev.size.slot,
+                             "name": ev.size.name,
+                             "width_mm": ev.size.width_mm,
+                             "length_mm": ev.size.length_mm,
+                             "station3": ev.size.station3})
+            self._bus.publish(signals.sizes_changed,
+                              SizesChanged(slot=int(slot or -1),
+                                           op=ev.op, payload=payload,
+                                           origin=ev.origin))
 
     def silent(self):
         """Context manager: suppress on_change emits inside the block.
@@ -177,8 +194,12 @@ class SizesStore:
             ).fetchone()
         return _row_to_size(row) if row else None
 
-    def add(self, s: Size) -> int:
-        """Insert a new row. Returns the assigned id (s.id is ignored)."""
+    def add(self, s: Size, *, origin: str = "user") -> int:
+        """Insert a new row. Returns the assigned id (s.id is ignored).
+
+        `origin` tags the resulting SizesChange so subscribers can filter
+        out their own writes (e.g. robot_master ignores 'robot_master').
+        """
         if s.slot is not None:
             self._guard_slot(s.slot, exclude=None)
         d = self._payload(s)
@@ -191,10 +212,10 @@ class SizesStore:
             conn.commit()
             new_id = int(cur.lastrowid)
         s2 = Size(**{**asdict(s), "id": new_id})
-        self._emit(SizesChange(op="add", size=s2, sid=new_id))
+        self._emit(SizesChange(op="add", size=s2, sid=new_id, origin=origin))
         return new_id
 
-    def update(self, s: Size) -> None:
+    def update(self, s: Size, *, origin: str = "user") -> None:
         """Update by id. Bumps updated_at. Raises if s.id is None or missing."""
         if s.id is None:
             raise ValueError("update() requires Size.id")
@@ -213,15 +234,15 @@ class SizesStore:
             conn.commit()
             if cur.rowcount == 0:
                 raise KeyError(f"no row with id={s.id}")
-        self._emit(SizesChange(op="update", size=s, sid=int(s.id)))
+        self._emit(SizesChange(op="update", size=s, sid=int(s.id), origin=origin))
 
-    def delete(self, sid: int) -> None:
+    def delete(self, sid: int, *, origin: str = "user") -> None:
         """Hard delete. (No soft-delete here — sizes are reference data.)"""
         with self._lock:
             conn = self._require_conn()
             conn.execute(f"DELETE FROM {TABLE} WHERE id = ?", (int(sid),))
             conn.commit()
-        self._emit(SizesChange(op="delete", size=None, sid=int(sid)))
+        self._emit(SizesChange(op="delete", size=None, sid=int(sid), origin=origin))
 
     # ---- slot-aware helpers -------------------------------------------------
 
@@ -236,10 +257,12 @@ class SizesStore:
     def upsert_slot(
         self, slot: int, name: str,
         width_mm: int, length_mm: int, *, station3: bool,
+        origin: str = "user",
     ) -> int:
         """Idempotent: ensure the slot holds the given (name, w, l, station3).
 
-        Returns the row's sid. No on_change emit on a no-op.
+        Returns the row's sid. No on_change emit on a no-op. `origin`
+        propagates to add()/update() so subscribers can self-filter.
         """
         size = Size(
             name=name, width_mm=int(width_mm), length_mm=int(length_mm),
@@ -247,22 +270,22 @@ class SizesStore:
         )
         current = self.get_slot(slot)
         if current is None:
-            return self.add(size)
+            return self.add(size, origin=origin)
         if (current.name      == size.name
                 and current.width_mm  == size.width_mm
                 and current.length_mm == size.length_mm
                 and current.station3  == size.station3):
             return int(current.id)                          # type: ignore[arg-type]
         size.id = current.id
-        self.update(size)
+        self.update(size, origin=origin)
         return int(current.id)                              # type: ignore[arg-type]
 
-    def clear_slot(self, slot: int) -> bool:
+    def clear_slot(self, slot: int, *, origin: str = "user") -> bool:
         """Remove the row pinned to `slot`. Returns True if deleted."""
         current = self.get_slot(slot)
         if current is None:
             return False
-        self.delete(int(current.id))                        # type: ignore[arg-type]
+        self.delete(int(current.id), origin=origin)         # type: ignore[arg-type]
         return True
 
     # ---- internals ----------------------------------------------------------

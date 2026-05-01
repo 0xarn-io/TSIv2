@@ -67,7 +67,12 @@ class RecipesPanel:
     def _refresh(self) -> None:
         if self._list_container is None:
             return
-        self._list_container.clear()
+        try:
+            self._list_container.clear()
+        except RuntimeError:
+            # Dead-client guard — see sizes_panel._refresh for context.
+            self._list_container = None
+            return
         with self._list_container:
             try:
                 rows = self.store.list(active_only=False)

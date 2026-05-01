@@ -74,6 +74,7 @@ class RobotVariablesMonitor:
         *,
         errors_store=None,
         plc=None,
+        bus=None,
     ):
         self.client = client
         self.vars: dict[str, RobotVariableConfig] = {v.alias: v for v in vars}
@@ -81,6 +82,7 @@ class RobotVariablesMonitor:
             raise ValueError("robot vars: duplicate alias")
         self._errors = errors_store
         self._plc = plc
+        self._bus = bus
 
         self._values:    dict[str, Any]   = {}        # last typed value
         self._last_poll: dict[str, float] = {}        # monotonic
@@ -121,9 +123,15 @@ class RobotVariablesMonitor:
         if cfg.mode != "rw":
             raise PermissionError(f"robot var '{alias}' is read-only")
         encoded = _encode(cfg, value)
-        ok = self.client.write_rapid(cfg.task, cfg.module, cfg.symbol, encoded)
-        if not ok:
-            raise RuntimeError(f"RWS write failed for '{alias}'")
+        try:
+            ok = self.client.write_rapid(cfg.task, cfg.module, cfg.symbol, encoded)
+            if not ok:
+                raise RuntimeError(f"RWS write failed for '{alias}'")
+        finally:
+            # write_rapid releases internally with silent=True; if that
+            # release POST failed we'd hold the lock and block the HMI.
+            # Explicit release as a final safety net.
+            self.client.release_mastership()
         # Update the local cache immediately; the next poll will confirm.
         self._observe(cfg, _coerce(cfg, encoded))
 
@@ -180,6 +188,13 @@ class RobotVariablesMonitor:
         if prev == value:
             return
         self._dispatch(cfg, prev, value)
+        if self._bus is not None:
+            from events import RobotVarChanged, signals
+            self._bus.publish(signals.robot_var_changed, RobotVarChanged(
+                alias=cfg.alias,
+                value=value,
+                prev=(None if prev is _MISSING else prev),
+            ))
 
     def _dispatch(self, cfg: RobotVariableConfig, prev: Any, value: Any) -> None:
         if "ui" in cfg.targets:

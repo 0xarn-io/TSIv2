@@ -35,7 +35,7 @@ class SickBridge:
     """
 
     @classmethod
-    def from_config(cls, scanner_cfg) -> "SickBridge":
+    def from_config(cls, scanner_cfg, *, bus=None) -> "SickBridge":
         """Construct from a ScannerSettings dataclass."""
         return cls(
             udp_port_a=scanner_cfg.udp_port_a,
@@ -43,6 +43,7 @@ class SickBridge:
             scanner_separation_m=scanner_cfg.separation_m,
             belt_speed_m_per_s=scanner_cfg.belt_speed_mps,
             belt_y=scanner_cfg.belt_y,
+            bus=bus,
         )
 
     def __init__(
@@ -56,7 +57,9 @@ class SickBridge:
         roi: ROI | None = None,
         proc_a: ScanProcessor | None = None,
         proc_b: ScanProcessor | None = None,
+        bus=None,
     ) -> None:
+        self._bus = bus
         self.scanner_separation_m = scanner_separation_m
         self.belt_y = belt_y
         self._roi = roi or ROI(x_min=0.10, x_max=2.35, y_min=-1.45, y_max=+0.60)
@@ -199,12 +202,23 @@ class SickBridge:
             for cb in list(self._measurement_cbs):
                 try: cb(c)
                 except Exception: pass
+            if self._bus is not None:
+                # Bridge mode: also publish on the bus. Subscribers using
+                # mode="thread" offload work; this call stays receiver-safe.
+                from events import SickMeasurement, signals
+                self._bus.publish(signals.sick_measurement, SickMeasurement(
+                    width_m=c["width"], height_m=c["height"],
+                    offset_m=c["offset"], ts=time.time(),
+                ))
         self._tracker.feed(m_a, m_b)
 
     def _fire_event(self, event: UnitEvent) -> None:
         for cb in list(self._event_cbs):
             try: cb(event)
             except Exception: pass
+        if self._bus is not None:
+            from events import SickUnitEvent, signals
+            self._bus.publish(signals.sick_unit_event, SickUnitEvent(event=event))
 
     def _heartbeat(self) -> None:
         """Periodic 'alive' line: enabled state + seconds since last scan."""

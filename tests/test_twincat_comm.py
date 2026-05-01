@@ -233,3 +233,33 @@ def test_primitive_types_complete():
     for name, (plc_const, ctype) in PRIMITIVE_TYPES.items():
         assert plc_const is not None, name
         assert ctypes.sizeof(ctype) > 0, name
+
+
+def test_ensure_published_swallows_subscribe_errors(signals_toml: Path, caplog):
+    """Connection-time ADS errors must not propagate from ensure_published.
+
+    A missing PLC at startup would otherwise tear down unrelated
+    components (UI, DB, robot) via NiceGUI's @app.on_startup hook.
+    """
+    import logging
+    from event_bus import EventBus
+    bus = EventBus()
+    comm = TwinCATComm.from_toml(signals_toml, bus=bus)
+    def _boom(*_a, **_kw):
+        raise RuntimeError("ADS down")
+    comm._conn.add_device_notification = _boom
+    with caplog.at_level(logging.WARNING, logger="twincat_comm"):
+        comm.ensure_published("sick.enable")          # must not raise
+    assert any(
+        "ensure_published(sick.enable) failed" in r.message
+        for r in caplog.records
+    )
+
+
+def test_ensure_published_no_op_without_bus(signals_toml: Path):
+    """No bus configured ⇒ ensure_published is a silent no-op (unchanged)."""
+    comm = TwinCATComm.from_toml(signals_toml)        # no bus=
+    def _boom(*_a, **_kw):
+        raise RuntimeError("would not be reached")
+    comm._conn.add_device_notification = _boom
+    comm.ensure_published("sick.enable")              # must not raise, must not call
