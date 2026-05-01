@@ -46,6 +46,7 @@ class RobotElogPoller:
         domain:       int  = 0,
         limit:        int  = 50,
         include_info: bool = False,
+        bus=None,
     ):
         self.monitor       = monitor
         self.errors_store  = errors_store
@@ -53,6 +54,7 @@ class RobotElogPoller:
         self.domain        = int(domain)
         self.limit         = int(limit)
         self.include_info  = bool(include_info)
+        self._bus          = bus
 
         self._seen_seqs: set[str] = set()
         self._stop:    threading.Event   | None = None
@@ -149,6 +151,10 @@ class RobotElogPoller:
                     },
                 )
                 self._seen_seqs.add(seq)
+                if self._bus is not None:
+                    from events import RobotErrorLogged, signals
+                    self._bus.publish(signals.robot_error_logged,
+                                      RobotErrorLogged(entry=dict(entry)))
             except Exception as ex:
                 log.warning("elog log failed for seq=%s: %s", seq, ex)
 

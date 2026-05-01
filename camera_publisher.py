@@ -36,10 +36,13 @@ class CameraPublisher:
         cameras: CameraManager,
         plc: TwinCATComm,
         triggers: list[CameraTriggerConfig],
+        *,
+        bus=None,
     ):
         self.cameras = cameras
         self.plc = plc
         self.triggers = list(triggers)
+        self._bus = bus
         self._handles: list[tuple[int, int]] = []
         self._unsub_done: list[Callable[[], None]] = []
 

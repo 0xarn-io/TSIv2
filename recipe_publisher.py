@@ -70,10 +70,14 @@ class RecipePublisher:
         recipes: RecipesStore,
         plc: TwinCATComm,
         cfg: RecipePublisherConfig,
+        *,
+        bus=None,
     ):
         self.recipes = recipes
         self.plc = plc
         self.cfg = cfg
+        self._bus = bus
+        self._last_code: int | None = None
         self._handles: tuple[int, int] | None = None
         self._queue: queue.Queue = queue.Queue()
         self._worker: threading.Thread | None = None
@@ -138,6 +142,13 @@ class RecipePublisher:
                 log.exception("recipe writer crashed on code=%s", item)
 
     def _apply(self, code: int) -> None:
+        prev = self._last_code
+        if code != prev and self._bus is not None:
+            from events import RecipeCodeChanged, signals
+            self._bus.publish(signals.recipe_code_changed,
+                              RecipeCodeChanged(code=int(code), prev=prev))
+        self._last_code = int(code)
+
         if code <= 0:
             # 0 means "no selection" — don't warn, don't query the DB.
             return
@@ -146,7 +157,13 @@ class RecipePublisher:
             log.warning("recipe code %s not found in DB — no setpoints written", code)
             return
         try:
-            self.plc.write(self.cfg.setpoints_alias, _recipe_to_struct(recipe))
+            struct = _recipe_to_struct(recipe)
+            self.plc.write(self.cfg.setpoints_alias, struct)
             log.info("recipe %s pushed", code)
+            if self._bus is not None:
+                from events import RecipeSetpointsPushed, signals
+                self._bus.publish(signals.recipe_setpoints_pushed,
+                                  RecipeSetpointsPushed(code=int(code),
+                                                        values=dict(struct)))
         except Exception as e:
             log.warning("recipe setpoints write failed: %s", e)

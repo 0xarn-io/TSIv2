@@ -54,6 +54,7 @@ from camera_publisher import CameraPublisher
 from config           import AppConfig
 from dashboard        import Dashboard
 from db_orchestrator  import DBOrchestrator
+from event_bus        import EventBus
 from plc_heartbeat    import PLCHeartbeat
 from robot_errors     import RobotElogPoller
 from robot_master     import RobotMasterMonitor
@@ -73,23 +74,28 @@ cfg = AppConfig.load(Path(__file__).with_name("app_config.toml"))
 
 # ─── build (data + hardware) ─────────────────────────────────────────────────
 
-bridge    = SickBridge.from_config(cfg.scanner)
-plc       = TwinCATComm.from_toml(cfg.plc.vars_file)
-publisher = SickPublisher(bridge, plc, cfg.plc.publisher)
+# Single in-process event bus. Constructed eagerly so any module can hold
+# a reference at build time; started/stopped inside the NiceGUI lifecycle
+# hooks below (loop ref needed for "async" subscribers).
+bus       = EventBus()
+
+bridge    = SickBridge.from_config(cfg.scanner, bus=bus)
+plc       = TwinCATComm.from_toml(cfg.plc.vars_file, bus=bus)
+publisher = SickPublisher(bridge, plc, cfg.plc.publisher, bus=bus)
 archive   = SnapshotArchive.from_config(cfg.snapshots) if cfg.snapshots else None
 cameras   = CameraManager.from_config(cfg.cameras, archive=archive)
-cam_pub   = CameraPublisher(cameras, plc, cfg.plc.camera_triggers)
+cam_pub   = CameraPublisher(cameras, plc, cfg.plc.camera_triggers, bus=bus)
 heartbeat = PLCHeartbeat(plc, cfg.plc.heartbeat) if cfg.plc.heartbeat else None
-robot     = RobotMonitor.from_config(cfg.robot) if cfg.robot else None
-robot_pub = (RobotPublisher(robot, plc, cfg.plc.robot_status)
+robot     = RobotMonitor.from_config(cfg.robot, bus=bus) if cfg.robot else None
+robot_pub = (RobotPublisher(robot, plc, cfg.plc.robot_status, bus=bus)
              if robot and cfg.plc.robot_status else None)
 db        = DBOrchestrator.from_config(
-    cfg, plc=plc, bridge=bridge, archive=archive,
+    cfg, plc=plc, bridge=bridge, archive=archive, bus=bus,
 )
 robot_vars = (
     RobotVariablesMonitor(
         robot.client, list(cfg.robot.vars),
-        errors_store=db.errors, plc=plc,
+        errors_store=db.errors, plc=plc, bus=bus,
     )
     if robot and cfg.robot and cfg.robot.vars else None
 )
@@ -100,6 +106,7 @@ robot_elog = (
         domain       = cfg.robot.elog_domain,
         limit        = cfg.robot.elog_limit,
         include_info = cfg.robot.elog_include_info,
+        bus          = bus,
     )
     if robot and db.errors and cfg.robot and cfg.robot.elog_poll_ms > 0 else None
 )
@@ -111,6 +118,7 @@ robot_master = (
         master_symbol = cfg.robot.master_symbol,
         dims_symbol   = cfg.robot.master_dims_symbol,
         poll_ms       = cfg.robot.master_poll_ms,
+        bus           = bus,
     )
     if robot and db.sizes and cfg.robot and cfg.robot.master_poll_ms > 0 else None
 )
@@ -130,6 +138,7 @@ dashboard = Dashboard.build(
     sizes_store        = db.sizes,
     errors_store       = db.errors,
     title              = cfg.ui.title,
+    bus                = bus,
 )
 dashboard.register_routes()
 
@@ -142,7 +151,9 @@ def _startup() -> None:
     # AmsRouter thread) can schedule snapshots cross-thread. on_startup
     # runs inside the NiceGUI loop, so get_event_loop() returns it.
     import asyncio
-    cameras.attach_loop(asyncio.get_event_loop())
+    loop = asyncio.get_event_loop()
+    cameras.attach_loop(loop)
+    bus.start(loop)                         # before any producer publishes
     plc.open()
     if archive:    archive.start()        # one-shot prune
     bridge.start()
@@ -171,6 +182,7 @@ def _shutdown() -> None:
     bridge.stop()
     if archive:    archive.stop()
     plc.close()
+    bus.stop()                              # after every producer is silent
 
 
 # ─── run ──────────────────────────────────────────────────────────────────────

@@ -60,10 +60,11 @@ def _event_to_struct(ev) -> dict:
 class SickPublisher:
     """Glue between SickBridge and TwinCATComm. No state of its own."""
 
-    def __init__(self, bridge: SickBridge, plc: TwinCATComm, cfg: PublisherConfig):
+    def __init__(self, bridge: SickBridge, plc: TwinCATComm, cfg: PublisherConfig, *, bus=None):
         self.bridge = bridge
         self.plc = plc
         self.cfg = cfg
+        self._bus = bus
         self._unsub_meas:  Callable[[], None] | None = None
         self._unsub_event: Callable[[], None] | None = None
         self._enable_handles: tuple[int, int] | None = None
