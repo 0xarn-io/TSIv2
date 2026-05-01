@@ -111,3 +111,12 @@ keep_days = 0
 [snapshots]
 root_dir  = "data/snapshots"
 keep_days = 90
+
+# Append-only log of robot controller state (opmode / ctrl / exec / speed).
+# Subscribes to RobotStatusChanged for change rows and snapshots
+# RobotMonitor.status() every `tick_period_s` seconds for time-in-state
+# aggregation. Comment out to disable the Robot Log tab + DB.
+[robot_status_log]
+db_path       = "data/robot_status_log.db"
+keep_days     = 90
+tick_period_s = 30.0

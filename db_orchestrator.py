@@ -18,6 +18,7 @@ from typing import Callable
 from errors_store     import ErrorsStore
 from recipe_publisher import RecipePublisher
 from recipes_store    import RecipesStore
+from robot_status_log import RobotStatusLog
 from sizes_store      import SizesStore
 from unit_logger      import UnitLogger
 
@@ -39,19 +40,23 @@ class DBOrchestrator:
     DB modules exist now or in the future.
     """
 
-    def __init__(self, cfg, *, plc, bridge, archive=None, bus=None):
+    def __init__(self, cfg, *, plc, bridge, archive=None, bus=None, robot=None):
         self.cfg     = cfg
         self._plc    = plc
         self._bridge = bridge
         self._archive = archive
         self._bus     = bus
+        self._robot   = robot
         self._services: list[_Service] = []
         self._started:  list[_Service] = []
         self._build()
 
     @classmethod
-    def from_config(cls, cfg, *, plc, bridge, archive=None, bus=None) -> "DBOrchestrator":
-        return cls(cfg, plc=plc, bridge=bridge, archive=archive, bus=bus)
+    def from_config(
+        cls, cfg, *, plc, bridge, archive=None, bus=None, robot=None,
+    ) -> "DBOrchestrator":
+        return cls(cfg, plc=plc, bridge=bridge, archive=archive,
+                   bus=bus, robot=robot)
 
     # ---- build (1 line per store) ------------------------------------------
 
@@ -77,6 +82,12 @@ class DBOrchestrator:
                               bus=self._bus,
                           )
                            if getattr(c, "unit_log", None) else None)
+        self.robot_status_log = (
+            RobotStatusLog.from_config(
+                c.robot_status_log, bus=self._bus, monitor=self._robot,
+            )
+            if getattr(c, "robot_status_log", None) else None
+        )
 
         # Order: PLC-independent stores first so a publisher / subscription
         # failure can't take them down via rollback. recipe_pub depends on
@@ -86,6 +97,7 @@ class DBOrchestrator:
         self._register(self.sizes)
         self._register(self.recipe_pub)
         self._register(self.unit_log)
+        self._register(self.robot_status_log)
 
     def _register(self, obj) -> None:
         if obj is None:
