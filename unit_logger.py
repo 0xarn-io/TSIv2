@@ -114,6 +114,8 @@ class UnitLogger:
         self._q: queue.Queue[dict | None] = queue.Queue(maxsize=_QUEUE_MAX)
         self._writer: threading.Thread | None = None
         self._unsub = None
+        self._bus_unsub = None
+        self._recipe_code_cache: int | None = None  # bus-mode only
         self._read_conn: sqlite3.Connection | None = None
         self._read_lock = threading.Lock()
 
@@ -149,7 +151,43 @@ class UnitLogger:
         self._writer.start()
         self._unsub = self.bridge.on_event(self._on_event)
 
+        # Bus mode: subscribe to PlcSignalChanged for the recipe alias and
+        # cache the latest value, so per-unit row-builds skip a sync ADS
+        # read on the SICK receiver thread. ensure_published guarantees
+        # the underlying notification is registered.
+        if self._bus is not None and self.recipe_alias:
+            self._start_recipe_cache()
+
+    def _start_recipe_cache(self) -> None:
+        from events import signals
+        try:
+            self.plc.ensure_published(self.recipe_alias)
+        except Exception as e:
+            log.warning("unit_logger ensure_published failed: %s", e)
+        # Seed the cache with the current value so the first unit log
+        # carries the right recipe code even before the first PLC change.
+        try:
+            self._recipe_code_cache = int(self.plc.read(self.recipe_alias))
+        except Exception as e:
+            log.debug("unit_logger: initial recipe read failed: %s", e)
+
+        recipe_alias = self.recipe_alias
+        def _on_plc(payload):
+            if payload.alias == recipe_alias:
+                try:
+                    self._recipe_code_cache = int(payload.value)
+                except (TypeError, ValueError):
+                    pass
+
+        self._bus_unsub = self._bus.subscribe(
+            signals.plc_signal_changed, _on_plc, mode="thread",
+        )
+
     def stop(self) -> None:
+        if self._bus_unsub is not None:
+            try: self._bus_unsub()
+            except Exception: pass
+            self._bus_unsub = None
         if self._unsub is not None:
             try: self._unsub()
             except Exception: pass
@@ -215,6 +253,10 @@ class UnitLogger:
     def _read_recipe_code(self) -> int | None:
         if not self.recipe_alias:
             return None
+        # Bus mode: use the cached value the bus subscription keeps fresh.
+        # Skips a sync ADS round-trip on the SICK receiver thread per unit.
+        if self._bus is not None:
+            return self._recipe_code_cache
         try:
             return int(self.plc.read(self.recipe_alias))
         except Exception as e:

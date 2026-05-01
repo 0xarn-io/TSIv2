@@ -8,6 +8,12 @@ Threading: notifications run on pyads's AmsRouter thread; making sync ADS
 writes from there deadlocks (response handler == caller). So the
 notification callback only enqueues; a dedicated worker thread does the
 actual plc.write off the AmsRouter.
+
+Bus mode: when an EventBus is supplied, the publisher subscribes to
+PlcSignalChanged with an alias filter (no per-alias callback ownership),
+and calls plc.ensure_published(code_alias) so the underlying ADS
+notification gets registered. Legacy mode (bus=None) keeps the original
+plc.subscribe(code_alias, cb) call.
 """
 from __future__ import annotations
 
@@ -15,6 +21,7 @@ import logging
 import queue
 import threading
 from dataclasses import dataclass
+from typing import Callable
 
 from recipes_store import Recipe, RecipesStore
 from twincat_comm  import TwinCATComm
@@ -79,6 +86,7 @@ class RecipePublisher:
         self._bus = bus
         self._last_code: int | None = None
         self._handles: tuple[int, int] | None = None
+        self._bus_unsub: Callable[[], None] | None = None
         self._queue: queue.Queue = queue.Queue()
         self._worker: threading.Thread | None = None
         self._stop_evt = threading.Event()
@@ -99,6 +107,37 @@ class RecipePublisher:
         except Exception as e:
             log.warning("initial recipe read failed: %s", e)
 
+        if self._bus is not None:
+            self._start_bus_mode()
+        else:
+            self._start_legacy_mode()
+
+    def _start_bus_mode(self) -> None:
+        """Bus mode: ensure_published + alias-filtered bus subscription."""
+        from events import signals
+        try:
+            self.plc.ensure_published(
+                self.cfg.code_alias, cycle_time_ms=self.cfg.cycle_ms,
+            )
+        except Exception as e:
+            log.warning(
+                "recipe code ensure_published failed (%s); recipe publisher "
+                "disabled until '%s' is available on the PLC",
+                e, self.cfg.code_alias,
+            )
+            return
+
+        code_alias = self.cfg.code_alias
+        def _on_plc(payload):
+            if payload.alias == code_alias:
+                self._queue.put(int(payload.value))
+
+        self._bus_unsub = self._bus.subscribe(
+            signals.plc_signal_changed, _on_plc, mode="thread",
+        )
+
+    def _start_legacy_mode(self) -> None:
+        """Legacy mode: per-alias callback enqueues to the worker."""
         try:
             self._handles = self.plc.subscribe(
                 self.cfg.code_alias,
@@ -115,6 +154,10 @@ class RecipePublisher:
             self._handles = None
 
     def stop(self) -> None:
+        if self._bus_unsub is not None:
+            try: self._bus_unsub()
+            except Exception as e: log.warning("bus unsubscribe failed: %s", e)
+            self._bus_unsub = None
         if self._handles is not None:
             try: self.plc.unsubscribe(self._handles)
             except Exception as e: log.warning("unsubscribe code failed: %s", e)

@@ -239,3 +239,86 @@ def test_db_dir_auto_created(tmp_path: Path):
         assert Path(cfg.db_path).is_file()
     finally:
         u.stop()
+
+
+# ---- bus-mode integration ----
+# Real EventBus + FakeTwinCATComm + real UnitLogger. Verifies the
+# recipe-code cache stays fresh via PlcSignalChanged events without a
+# per-unit ADS read on the SICK receiver thread.
+
+import asyncio
+import threading
+from event_bus import EventBus
+from tests.fakes import FakeTwinCATComm
+
+
+def _bus_loop():
+    loop = asyncio.new_event_loop()
+    started = threading.Event()
+    def _run():
+        asyncio.set_event_loop(loop)
+        loop.call_soon(started.set)
+        loop.run_forever()
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    started.wait(timeout=1.0)
+    return loop, t
+
+
+def test_bus_mode_registers_recipe_alias_notification(tmp_path: Path):
+    """ensure_published must be called for the recipe alias in bus mode."""
+    bus = EventBus()
+    loop, t = _bus_loop()
+    bus.start(loop)
+    plc = FakeTwinCATComm(bus=bus)
+    plc.read = lambda alias: 0
+    bridge = MagicMock(); bridge.on_event = MagicMock(return_value=MagicMock())
+    cfg = UnitLoggerConfig(db_path=str(tmp_path / "u.db"))
+    u = UnitLogger(cfg, bridge, plc, recipe_alias="recipe.code", bus=bus)
+    try:
+        u.start()
+        assert "recipe.code" in plc.aliases_with_notifications()
+    finally:
+        u.stop()
+        bus.stop()
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(timeout=2.0)
+        loop.close()
+
+
+def test_bus_mode_recipe_cache_updates_on_plc_change(tmp_path: Path):
+    """A PlcSignalChanged for the recipe alias updates the cache;
+    subsequent unit events get the new code without a sync ADS read."""
+    bus = EventBus()
+    loop, t = _bus_loop()
+    bus.start(loop)
+    plc = FakeTwinCATComm(bus=bus)
+    plc.read = lambda alias: 0   # initial seed = 0
+    captured = {}
+    bridge = MagicMock()
+    def on_event(cb):
+        captured["cb"] = cb
+        return MagicMock()
+    bridge.on_event = MagicMock(side_effect=on_event)
+    cfg = UnitLoggerConfig(db_path=str(tmp_path / "u.db"))
+    u = UnitLogger(cfg, bridge, plc, recipe_alias="recipe.code", bus=bus)
+    try:
+        u.start()
+        # PLC pushes new recipe code 7; bus subscriber updates the cache.
+        plc.simulate_change("recipe.code", 7)
+        for _ in range(50):
+            if u._recipe_code_cache == 7:
+                break
+            time.sleep(0.01)
+        assert u._recipe_code_cache == 7
+        # Now a unit event arrives; row should pick up code 7 from cache,
+        # not call plc.read again (which would still return 0).
+        captured["cb"](_evt())
+        _drain(u, 1)
+        assert u.recent()[0]["recipe_code"] == 7
+    finally:
+        u.stop()
+        bus.stop()
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(timeout=2.0)
+        loop.close()
