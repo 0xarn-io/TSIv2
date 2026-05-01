@@ -42,10 +42,29 @@ _NICEGUI_IMPORT = re.compile(
 )
 
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _find_module(name: str) -> Path | None:
+    """Locate `name.py` anywhere under the repo (root or topical subdir).
+
+    After the folder restructure modules live under core/, plc/, robot/,
+    stores/, ui/, camera/ — pytest's pythonpath resolves the imports, but
+    this guard reads source text directly so it has to walk the tree.
+    """
+    for path in _REPO_ROOT.rglob(name):
+        # Skip caches, venv copies, and tests-as-fixtures.
+        parts = set(path.parts)
+        if parts & {"__pycache__", ".git", "tests", "static"}:
+            continue
+        return path
+    return None
+
+
 @pytest.mark.parametrize("module", DATA_LAYER_MODULES)
 def test_module_does_not_import_nicegui(module: str) -> None:
-    path = Path(__file__).resolve().parent.parent / module
-    if not path.is_file():
+    path = _find_module(module)
+    if path is None:
         pytest.skip(f"{module} not present")
     src = path.read_text(encoding="utf-8")
     matches = _NICEGUI_IMPORT.findall(src)
