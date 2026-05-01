@@ -6,3 +6,10 @@
 # rename storm. The runtime equivalent (for `python Main.py`) is the
 # sys.path.insert loop at the top of Main.py.
 pythonpath = [".", "core", "plc", "robot", "stores", "ui", "camera"]
+
+[tool.pyright]
+# IDE static-analysis equivalent of the pytest pythonpath above. Pylance /
+# Pyright don't run our Main.py sys.path shim, so without this they flag
+# every `from event_bus import ...` as reportMissingImports. The dirs are
+# the same as pythonpath, minus "." (already on the analysis path).
+extraPaths = ["core", "plc", "robot", "stores", "ui", "camera"]
