@@ -233,3 +233,45 @@ def test_fetch_errors_passes_limit_to_request():
     m.fetch_errors(domain=2, limit=10)
     assert captured["path"] == "/rw/elog/2"
     assert captured["params"]["lim"] == 10
+
+
+def test_fetch_errors_logs_warning_only_once_when_stuck(caplog):
+    """Repeated all-variants-failed cycles must log the warning only on
+    the first failure (sticky throttle). Steady-state poll is silent."""
+    import logging as _logging
+    m = _make_monitor({})                           # every _get returns None
+    with caplog.at_level(_logging.WARNING, logger="robot_status"):
+        for _ in range(5):
+            assert m.fetch_errors() == []
+    fail_msgs = [
+        r for r in caplog.records
+        if "all variants" in r.message
+    ]
+    assert len(fail_msgs) == 1
+
+
+def test_fetch_errors_logs_recovery_after_failed_state(caplog):
+    """First failure logs the warning. Next success logs INFO 'recovered'.
+    A subsequent failure logs the warning again (state-change semantics).
+
+    fetch_errors tries up to 4 variants per call until one succeeds, so
+    the response stream is padded: 4 None for the first fail-cycle, one
+    good response (consumed on the first try), 4 None for the second.
+    """
+    import logging as _logging
+    m = RobotMonitor(RobotConfig(ip="1.2.3.4"))
+
+    responses = [None]*4 + [_elog_response()] + [None]*4
+    def _get(path, params=None, silent=False):
+        return responses.pop(0)
+    m._get = _get
+
+    with caplog.at_level(_logging.INFO, logger="robot_status"):
+        m.fetch_errors()                            # fail → warn
+        m.fetch_errors()                            # ok   → recovered (info)
+        m.fetch_errors()                            # fail → warn (state changed)
+
+    warn_msgs = [r for r in caplog.records if "all variants" in r.message]
+    info_msgs = [r for r in caplog.records if "recovered" in r.message]
+    assert len(warn_msgs) == 2
+    assert len(info_msgs) == 1
