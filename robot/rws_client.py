@@ -15,7 +15,9 @@ Writes:
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
 from typing import Any, Iterable, Optional
 
 import requests
@@ -23,6 +25,47 @@ import urllib3
 from requests.auth import HTTPBasicAuth
 
 log = logging.getLogger(__name__)
+
+
+# Match unescaped C0 control chars and DEL (excluding TAB \t / LF \n / CR \r,
+# which are legal between JSON tokens). RWS occasionally embeds these inside
+# localized message strings in /rw/elog responses, breaking strict parsing.
+_C0_BAD = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _parse_lenient_json(text: str) -> Optional[Any]:
+    """Try several increasingly-tolerant JSON parses.
+
+    Some RWS endpoints (notably /rw/elog) ship responses that strict
+    json.loads rejects: a UTF-8 BOM at the head, or unescaped C0 control
+    chars inside localized message strings. We try in order:
+      1. strict (the common case)
+      2. BOM stripped + strict
+      3. BOM stripped + strict=False (tolerates more whitespace)
+      4. control chars dropped + strict
+
+    Returns the parsed object on success, None if every attempt fails.
+    """
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    stripped = text.lstrip("﻿")
+    if stripped != text:
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
+    try:
+        return json.loads(stripped, strict=False)
+    except json.JSONDecodeError:
+        pass
+    try:
+        return json.loads(_C0_BAD.sub("", stripped))
+    except json.JSONDecodeError:
+        return None
 
 
 class RWSClient:
@@ -33,6 +76,10 @@ class RWSClient:
         # decoupled — only attribute access is used).
         self.cfg = cfg
         self._session = self._make_session()
+        # Track per-(path, content-type) parse failures so we log a
+        # diagnostic exactly once per unique signature and don't spam
+        # the console when a stuck endpoint is polled at 5–10s cadence.
+        self._parse_diag_seen: set[str] = set()
 
     # ---- HTTP primitives ----------------------------------------------------
 
@@ -55,6 +102,12 @@ class RWSClient:
         """JSON GET. Returns parsed dict on 200, else None (logged unless silent).
 
         `accept` overrides the session-level Accept header for this call only.
+
+        Strict json.loads is tried first; on failure we fall back to a
+        lenient parse (BOM strip, control-char tolerance, control-char
+        strip) before giving up. If every attempt fails we emit a
+        one-shot diagnostic logged with the path + status + content-type
+        + body snippet so an unknown malformed shape is actionable.
         """
         try:
             headers = {"Accept": accept} if accept else None
@@ -62,14 +115,54 @@ class RWSClient:
                 self._url(path), params=params, headers=headers,
                 timeout=timeout or self.cfg.timeout_s,
             )
-            if r.status_code == 200:
-                return r.json()
-            if not silent:
-                log.warning("RWS GET %s -> %s", path, r.status_code)
         except Exception as e:
             if not silent:
                 log.warning("RWS GET %s failed: %s", path, e)
+            return None
+
+        if r.status_code != 200:
+            if not silent:
+                log.warning("RWS GET %s -> %s", path, r.status_code)
+            return None
+
+        try:
+            obj = r.json()
+        except ValueError:
+            obj = _parse_lenient_json(r.text)
+        if obj is not None:
+            self._clear_parse_diag(path)
+            return obj
+
+        # Genuinely unparseable. Diagnose once per unique signature
+        # regardless of `silent` — silent suppresses transient errors,
+        # not "the endpoint is returning content we can't read."
+        self._log_parse_diag(path, r)
         return None
+
+    def _diag_key(self, path: str, ct: str) -> str:
+        return f"{path}|{ct}"
+
+    def _log_parse_diag(self, path: str, r: requests.Response) -> None:
+        ct = r.headers.get("Content-Type", "?")
+        key = self._diag_key(path, ct)
+        if key in self._parse_diag_seen:
+            return
+        self._parse_diag_seen.add(key)
+        body = r.text or ""
+        snippet = body[:300].replace("\n", "\\n").replace("\r", "\\r")
+        log.warning(
+            "RWS GET %s parse-failed (status=%d ct=%s len=%d). "
+            "First 300 chars: %s",
+            path, r.status_code, ct, len(body), snippet,
+        )
+
+    def _clear_parse_diag(self, path: str) -> None:
+        prefix = f"{path}|"
+        recovered = [k for k in self._parse_diag_seen if k.startswith(prefix)]
+        for k in recovered:
+            self._parse_diag_seen.discard(k)
+        if recovered:
+            log.info("RWS GET %s parse-recovered", path)
 
     def get_first(self, *paths: str, params=None) -> Optional[dict]:
         """Try paths in order, return the first 200. Warn only if all fail."""

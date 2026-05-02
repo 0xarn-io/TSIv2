@@ -100,6 +100,11 @@ class RobotMonitor:
         self._stop: threading.Event | None = None
         self._thread: threading.Thread | None = None
         self._change_cbs: list[Callable[[RobotStatus], None]] = []
+        # Sticky flag: set True when fetch_errors has logged "all
+        # variants failed", cleared on the next successful pull. Stops
+        # the poller from spamming once-per-tick when the elog endpoint
+        # is stuck returning malformed JSON.
+        self._elog_failed: bool = False
 
     @classmethod
     def from_config(cls, cfg: RobotConfig, *, bus=None) -> "RobotMonitor":
@@ -160,10 +165,20 @@ class RobotMonitor:
             if obj is not None:
                 break
         if obj is None:
-            log.warning(
-                "RWS GET %s failed (all variants): malformed response", path,
-            )
+            # State-change throttle: log "all variants failed" exactly
+            # once per stuck-state, and "elog recovered" exactly once
+            # when it works again. Keeps the steady-state console clean
+            # at the 5–10s poll cadence. The deeper one-shot diagnostic
+            # comes from RWSClient.get() with the actual response bytes.
+            if not self._elog_failed:
+                log.warning(
+                    "RWS GET %s failed (all variants): malformed response", path,
+                )
+                self._elog_failed = True
             return []
+        if self._elog_failed:
+            log.info("RWS GET %s recovered", path)
+            self._elog_failed = False
         items = obj.get("_embedded", {}).get("resources", [])
         TYPES = {"1": "INFO", "2": "WARN", "3": "ERROR"}
         keep = {"1", "2", "3"} if include_info else {"2", "3"}

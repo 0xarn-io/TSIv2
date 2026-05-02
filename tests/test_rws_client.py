@@ -226,3 +226,104 @@ def test_format_escapes_quotes_in_strings():
 def test_format_floats_keep_decimal_when_fractional():
     assert format_rapid_array([1.5]) == "[1.5]"
     assert format_rapid_array([2.0]) == "[2]"
+
+
+# ─── lenient JSON parse + one-shot diagnostic ─────────────────────────────────
+
+import json as _json
+import logging as _logging
+
+from rws_client import _parse_lenient_json
+
+
+def _resp(text: str, *, status: int = 200, ct: str = "application/json"):
+    """Build a fake requests.Response with raw .text but a strict r.json()
+    that fails — exercising the lenient fallback path in RWSClient.get()."""
+    r = MagicMock()
+    r.status_code = status
+    r.headers = {"Content-Type": ct}
+    r.text = text
+    def _strict_json():
+        return _json.loads(text)            # raises on malformed
+    r.json.side_effect = _strict_json
+    return r
+
+
+def test_parse_lenient_strict_passthrough():
+    assert _parse_lenient_json('{"a": 1}') == {"a": 1}
+
+
+def test_parse_lenient_handles_utf8_bom():
+    assert _parse_lenient_json('﻿{"a": 1}') == {"a": 1}
+
+
+def test_parse_lenient_handles_unescaped_control_chars():
+    """A localized message containing \\x01 inside a string parses via the
+    strict=False fallback (which tolerates control chars within strings).
+    The char is preserved in the value — we just don't reject the doc."""
+    bad = '{"msg": "hello\x01world", "code": 5}'
+    out = _parse_lenient_json(bad)
+    assert out == {"msg": "hello\x01world", "code": 5}
+
+
+def test_parse_lenient_strips_control_chars_when_strict_false_also_fails():
+    """If a control char sits OUTSIDE strings (between tokens) where even
+    strict=False rejects it, the final pass strips and retries."""
+    bad = '{\x01"a": 1}'                   # \x01 between '{' and the key
+    out = _parse_lenient_json(bad)
+    assert out == {"a": 1}
+
+
+def test_parse_lenient_returns_none_for_truly_malformed():
+    assert _parse_lenient_json("not json at all") is None
+    assert _parse_lenient_json("") is None
+
+
+def test_get_recovers_via_lenient_parse_no_diagnostic(caplog):
+    """Strict json fails, lenient succeeds → caller gets the dict and no
+    diagnostic line is logged."""
+    text = '﻿{"_embedded": {"resources": [{"code": "1"}]}}'   # BOM + valid JSON
+    c, _ = _client_with_mock_session(get=lambda *a, **kw: _resp(text))
+    with caplog.at_level(_logging.WARNING, logger="rws_client"):
+        out = c.get("/rw/elog/0", silent=True)
+    assert out == {"_embedded": {"resources": [{"code": "1"}]}}
+    assert not any("parse-failed" in r.message for r in caplog.records)
+
+
+def test_get_logs_diagnostic_once_on_unparseable(caplog):
+    """A response strict + lenient both reject is logged exactly once per
+    (path, content-type) — subsequent calls stay silent."""
+    text = "<html>not json at all</html>"
+    c, _ = _client_with_mock_session(
+        get=lambda *a, **kw: _resp(text, ct="text/html"),
+    )
+    with caplog.at_level(_logging.WARNING, logger="rws_client"):
+        for _ in range(5):
+            assert c.get("/rw/elog/0", silent=True) is None
+    diag = [r for r in caplog.records if "parse-failed" in r.message]
+    assert len(diag) == 1
+    assert "/rw/elog/0" in diag[0].message
+    assert "ct=text/html" in diag[0].message
+    assert "html" in diag[0].message.lower()       # body snippet present
+
+
+def test_get_diagnostic_clears_on_recovery_then_relogs(caplog):
+    """After a parse-recovered transition the diagnostic is armed again —
+    a subsequent failure with the same signature logs anew."""
+    bad = "<html>error</html>"
+    good = '{"ok": true}'
+    responses = [bad, good, bad]
+    def _next(*_a, **_kw):
+        return _resp(responses.pop(0), ct="text/html")
+    c, _ = _client_with_mock_session(get=_next)
+
+    with caplog.at_level(_logging.WARNING, logger="rws_client"):
+        with caplog.at_level(_logging.INFO, logger="rws_client"):
+            assert c.get("/rw/elog/0", silent=True) is None        # bad → diag #1
+            assert c.get("/rw/elog/0", silent=True) == {"ok": True} # good → recovered
+            assert c.get("/rw/elog/0", silent=True) is None        # bad → diag #2
+
+    diag = [r for r in caplog.records if "parse-failed" in r.message]
+    recovered = [r for r in caplog.records if "parse-recovered" in r.message]
+    assert len(diag) == 2
+    assert len(recovered) == 1
