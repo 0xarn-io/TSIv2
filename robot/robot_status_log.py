@@ -66,10 +66,15 @@ CREATE INDEX IF NOT EXISTS idx_rsl_bypass ON robot_status_log(bypass);
 
 @dataclass(frozen=True)
 class RobotStatusLogConfig:
-    db_path:       str
-    keep_days:     int   = 90
-    tick_period_s: float = 30.0
-    bypass_alias:  str | None = None
+    db_path:           str
+    keep_days:         int   = 90
+    tick_period_s:     float = 30.0
+    # PLC bool alias (plc_signals.toml). None = no PLC source.
+    bypass_alias:      str | None = None
+    # RAPID variable alias (robot_vars.toml) read via RWS. None = no RWS source.
+    # Effective bypass is the OR of both sources, so either input flipping
+    # high makes the row record bypass=1.
+    bypass_rws_alias:  str | None = None
 
 
 class RobotStatusLog:
@@ -83,9 +88,11 @@ class RobotStatusLog:
         self._writer: threading.Thread | None = None
         self._tick:   threading.Thread | None = None
         self._stop_tick: threading.Event | None = None
-        self._unsub_status = None
-        self._unsub_bypass = None
-        self._bypass: bool = False
+        self._unsub_status     = None
+        self._unsub_bypass_plc = None
+        self._unsub_bypass_rws = None
+        self._bypass_plc: bool = False
+        self._bypass_rws: bool = False
         self._read_conn: sqlite3.Connection | None = None
         self._read_lock = threading.Lock()
 
@@ -137,9 +144,14 @@ class RobotStatusLog:
                 signals.robot_status_changed, self._on_change, mode="thread",
             )
             if self.cfg.bypass_alias:
-                self._unsub_bypass = self._bus.subscribe_filtered(
-                    signals.plc_signal_changed, self._on_bypass,
+                self._unsub_bypass_plc = self._bus.subscribe_filtered(
+                    signals.plc_signal_changed, self._on_bypass_plc,
                     mode="thread", alias=self.cfg.bypass_alias,
+                )
+            if self.cfg.bypass_rws_alias:
+                self._unsub_bypass_rws = self._bus.subscribe_filtered(
+                    signals.robot_var_changed, self._on_bypass_rws,
+                    mode="thread", alias=self.cfg.bypass_rws_alias,
                 )
 
         if self._monitor is not None and self.cfg.tick_period_s > 0:
@@ -150,7 +162,8 @@ class RobotStatusLog:
             self._tick.start()
 
     def stop(self) -> None:
-        for unsub_attr in ("_unsub_status", "_unsub_bypass"):
+        for unsub_attr in ("_unsub_status", "_unsub_bypass_plc",
+                           "_unsub_bypass_rws"):
             unsub = getattr(self, unsub_attr, None)
             if unsub is not None:
                 try: unsub()
@@ -423,17 +436,40 @@ class RobotStatusLog:
         except Exception as e:
             log.warning("robot_status_log: change handler failed: %s", e)
 
-    def _on_bypass(self, payload) -> None:
-        """plc_signal_changed handler — only invoked when alias matches.
+    def _on_bypass_plc(self, payload) -> None:
+        """plc_signal_changed handler — alias-filtered to bypass_alias."""
+        self._bypass_source_changed("plc", bool(payload.value))
 
-        Cache the new bypass value and enqueue a row immediately so the
-        timeline records the transition. Pulls a current RobotStatus
-        snapshot from the monitor if available; otherwise the row will
-        carry the cached / default fields."""
+    def _on_bypass_rws(self, payload) -> None:
+        """robot_var_changed handler — alias-filtered to bypass_rws_alias.
+
+        RAPID values come through as the RWS-reported text/number; coerce
+        to bool the same way RobotVariablesMonitor stores them: truthy
+        non-zero number / non-empty string / explicit True."""
+        v = payload.value
+        if isinstance(v, str):
+            v = v.strip().lower() not in ("", "false", "0", "no", "off")
+        self._bypass_source_changed("rws", bool(v))
+
+    def _bypass_source_changed(self, source: str, value: bool) -> None:
+        """Update the named source flag and, if the OR'd effective bypass
+        actually changed (or the per-source flag did), enqueue a row so the
+        timeline records the transition."""
         try:
-            self._bypass = bool(payload.value)
+            prev_eff = self._bypass_plc or self._bypass_rws
+            if source == "plc":
+                self._bypass_plc = value
+            else:
+                self._bypass_rws = value
+            new_eff = self._bypass_plc or self._bypass_rws
+            # Always enqueue — even when the effective state is unchanged
+            # (e.g. PLC drops bypass while RWS still holds it). We want
+            # the per-source breadcrumb in the log for forensic queries.
             status = self._monitor.status() if self._monitor is not None else None
             self._enqueue(status, source="change")
+            if prev_eff != new_eff:
+                log.info("robot_status_log: bypass effective=%d (%s -> %s)",
+                         int(new_eff), source, value)
         except Exception as e:
             log.warning("robot_status_log: bypass handler failed: %s", e)
 
@@ -454,7 +490,7 @@ class RobotStatusLog:
             "exec_state":  str(getattr(status, "exec_state", "unknown")),
             "speed_ratio": int(getattr(status, "speed_ratio", 0) or 0),
             "is_ready":    int(bool(getattr(status, "is_ready", False))),
-            "bypass":      int(bool(self._bypass)),
+            "bypass":      int(self._bypass_plc or self._bypass_rws),
             "source":      source,
         }
         try:

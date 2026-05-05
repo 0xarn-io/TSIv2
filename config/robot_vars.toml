@@ -18,6 +18,20 @@ type     = "num"           # num | bool | string
 mode     = "r"            # r | rw
 poll_ms  = 1000
 targets  = ["ui"]
+
+# Bypass status read via RWS — `bypass_rws_alias` in app_config.toml
+# points at this entry. Adjust task/module/symbol to match the RAPID
+# variable on your controller. Listed under targets=["ui"] so it's
+# also visible live on the Vars tab.
+[[vars]]
+alias    = "Bypass"
+task     = "T_ROB1"
+module   = "Main_Flow"
+symbol   = "Bypass"
+type     = "bool"
+mode     = "r"
+poll_ms  = 1000
+targets  = ["ui"]
 #
 # [[vars]]
 # alias    = "production_count"

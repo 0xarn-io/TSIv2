@@ -462,6 +462,119 @@ def test_bypass_alias_unset_skips_subscription(tmp_path: Path, bus):
         s.stop()
 
 
+def test_bypass_via_rws_var_changed(tmp_path: Path, bus):
+    """A robot_var_changed publish for the configured RWS alias flips
+    bypass on subsequent rows — same shape as the PLC source."""
+    from events import RobotStatusChanged, RobotVarChanged, signals
+    from robot_status import RobotStatus
+
+    s = _store(tmp_path, bus=bus, tick_period_s=0,
+               bypass_rws_alias="robot.bypass_rws")
+    s.start()
+    try:
+        bus.publish(
+            signals.robot_var_changed,
+            RobotVarChanged(alias="robot.bypass_rws", value=True, prev=False),
+        )
+        _drain(s, 1)
+
+        bus.publish(
+            signals.robot_status_changed,
+            RobotStatusChanged(status=RobotStatus(opmode="AUTO")),
+        )
+        _drain(s, 2)
+        assert s.recent()[0]["bypass"] == 1
+    finally:
+        s.stop()
+
+
+def test_bypass_or_fusion_either_source_high(tmp_path: Path, bus):
+    """When both PLC and RWS aliases are configured, the effective bypass
+    is the OR of the two — dropping one source doesn't clear the column
+    if the other is still high."""
+    from events import (PlcSignalChanged, RobotStatusChanged,
+                        RobotVarChanged, signals)
+    from robot_status import RobotStatus
+
+    s = _store(tmp_path, bus=bus, tick_period_s=0,
+               bypass_alias="robot.bypass",
+               bypass_rws_alias="robot.bypass_rws")
+    s.start()
+    try:
+        # PLC says bypassed.
+        bus.publish(
+            signals.plc_signal_changed,
+            PlcSignalChanged(alias="robot.bypass", value=True, ts=0.0),
+        )
+        # RWS says bypassed too.
+        bus.publish(
+            signals.robot_var_changed,
+            RobotVarChanged(alias="robot.bypass_rws", value=True, prev=False),
+        )
+        # Now PLC drops — RWS still high → effective bypass must remain 1.
+        bus.publish(
+            signals.plc_signal_changed,
+            PlcSignalChanged(alias="robot.bypass", value=False, ts=0.0),
+        )
+        _drain(s, 3)
+
+        bus.publish(
+            signals.robot_status_changed,
+            RobotStatusChanged(status=RobotStatus(opmode="AUTO")),
+        )
+        _drain(s, 4)
+        assert s.recent()[0]["bypass"] == 1
+
+        # Now RWS drops too → effective bypass = 0 on the next row.
+        bus.publish(
+            signals.robot_var_changed,
+            RobotVarChanged(alias="robot.bypass_rws", value=False, prev=True),
+        )
+        bus.publish(
+            signals.robot_status_changed,
+            RobotStatusChanged(status=RobotStatus(opmode="AUTO")),
+        )
+        _drain(s, 6)
+        assert s.recent()[0]["bypass"] == 0
+    finally:
+        s.stop()
+
+
+def test_bypass_rws_string_value_is_coerced(tmp_path: Path, bus):
+    """RAPID values often come back as strings ('TRUE'/'FALSE'). The
+    handler must coerce them like RobotVariablesMonitor does."""
+    from events import RobotStatusChanged, RobotVarChanged, signals
+    from robot_status import RobotStatus
+
+    s = _store(tmp_path, bus=bus, tick_period_s=0,
+               bypass_rws_alias="rapid.bypass")
+    s.start()
+    try:
+        bus.publish(
+            signals.robot_var_changed,
+            RobotVarChanged(alias="rapid.bypass", value="TRUE", prev="FALSE"),
+        )
+        bus.publish(
+            signals.robot_status_changed,
+            RobotStatusChanged(status=RobotStatus(opmode="AUTO")),
+        )
+        _drain(s, 2)
+        assert s.recent()[0]["bypass"] == 1
+
+        bus.publish(
+            signals.robot_var_changed,
+            RobotVarChanged(alias="rapid.bypass", value="false", prev="TRUE"),
+        )
+        bus.publish(
+            signals.robot_status_changed,
+            RobotStatusChanged(status=RobotStatus(opmode="AUTO")),
+        )
+        _drain(s, 4)
+        assert s.recent()[0]["bypass"] == 0
+    finally:
+        s.stop()
+
+
 def test_alter_table_migration_adds_bypass_column(tmp_path: Path):
     """A pre-bypass DB file (no `bypass` column) must gain the column
     on next start() without losing rows."""
